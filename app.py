@@ -27,6 +27,16 @@ login_manager.login_message = 'Please login to access this page.'
 REPORT_PASSWORD = "2201"
 
 # ─── Models ───────────────────────────────────────────────────────────────────
+# Team <-> Buyer: which buyers a team works on
+team_buyers = db.Table('team_buyers',
+    db.Column('team_id', db.Integer, db.ForeignKey('team.id'), primary_key=True),
+    db.Column('buyer_id', db.Integer, db.ForeignKey('buyer.id'), primary_key=True))
+# User <-> Buyer: which buyers a member is allocated (follows)
+user_buyers = db.Table('user_buyers',
+    db.Column('user_id', db.Integer, db.ForeignKey('user.id'), primary_key=True),
+    db.Column('buyer_id', db.Integer, db.ForeignKey('buyer.id'), primary_key=True))
+
+
 class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
@@ -36,6 +46,8 @@ class User(UserMixin, db.Model):
     team_id = db.Column(db.Integer, db.ForeignKey('team.id'), nullable=True)
     is_active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    # Buyers this member is allocated (follows). Empty = falls back to the whole team.
+    buyers = db.relationship('Buyer', secondary=user_buyers, backref='followers', lazy=True)
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -56,8 +68,12 @@ class Team(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), unique=True, nullable=False)
     description = db.Column(db.Text)
+    leader_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     members = db.relationship('User', backref='team', lazy=True, foreign_keys=[User.team_id])
+    leader = db.relationship('User', foreign_keys=[leader_id])
+    # Buyers this team works on (leader sees all of these)
+    buyers = db.relationship('Buyer', secondary=team_buyers, backref='teams', lazy=True)
 
 
 class Buyer(db.Model):
@@ -78,8 +94,9 @@ class Style(db.Model):
     style_no = db.Column(db.String(100), nullable=False)
     po = db.Column(db.String(100))
     description = db.Column(db.Text)
-    buyer_id = db.Column(db.Integer, db.ForeignKey('buyer.id'), nullable=False)
+    buyer_id = db.Column(db.Integer, db.ForeignKey('buyer.id'), nullable=True)
     team_id = db.Column(db.Integer, db.ForeignKey('team.id'), nullable=True)
+    team = db.relationship('Team', backref='styles', lazy=True)
     season = db.Column(db.String(50))
     category = db.Column(db.String(100))
     fabric = db.Column(db.String(100))
@@ -106,6 +123,45 @@ class StyleComment(db.Model):
 @login_manager.user_loader
 def load_user(user_id):
     return User.query.get(int(user_id))
+
+
+def visible_buyer_ids(user):
+    """Buyer ids this user may see, or None for 'all' (admin).
+
+    Leader: all buyers of teams they lead.
+    Member: their allocated buyers; if none allocated yet, their whole team's buyers.
+    """
+    if user is None:
+        return set()
+    if user.is_admin:
+        return None
+    ids = set()
+    for tm in Team.query.filter_by(leader_id=user.id).all():
+        ids.update(b.id for b in tm.buyers)
+    if user.buyers:
+        ids.update(b.id for b in user.buyers)
+    elif user.team_id:
+        team = Team.query.get(user.team_id)
+        if team:
+            ids.update(b.id for b in team.buyers)
+    return ids
+
+
+def visible_styles_query(query, user):
+    """Restrict a Style query to what the user may see.
+
+    Admin sees everything. Others see styles whose buyer is visible to them,
+    plus buyer-less (Style-Name-only) placeholders they created themselves.
+    """
+    if user is None:
+        return query.filter(db.false())
+    if user.is_admin:
+        return query
+    vids = visible_buyer_ids(user)
+    return query.filter(
+        (Style.buyer_id.in_(vids)) |
+        ((Style.buyer_id.is_(None)) & (Style.created_by == user.id))
+    )
 
 
 # ─── Routes: Auth ─────────────────────────────────────────────────────────────
@@ -144,14 +200,20 @@ def logout():
 @app.route('/dashboard')
 @login_required
 def dashboard():
-    total_buyers = Buyer.query.filter_by(is_active=True).count()
-    total_styles = Style.query.count()
+    vids = visible_buyer_ids(current_user)
+    if vids is None:
+        total_buyers = Buyer.query.filter_by(is_active=True).count()
+        style_q = Style.query
+    else:
+        total_buyers = Buyer.query.filter_by(is_active=True).filter(Buyer.id.in_(vids)).count()
+        style_q = visible_styles_query(Style.query, current_user)
+    total_styles = style_q.count()
     total_teams = Team.query.count()
     total_users = User.query.filter_by(is_active=True).count()
-    recent_styles = Style.query.order_by(Style.created_at.desc()).limit(5).all()
+    recent_styles = style_q.order_by(Style.created_at.desc()).limit(5).all()
     status_counts = {}
     for s in ['Active', 'Completed', 'On Hold', 'Cancelled']:
-        status_counts[s] = Style.query.filter_by(status=s).count()
+        status_counts[s] = style_q.filter_by(status=s).count()
     return render_template('dashboard.html',
         total_buyers=total_buyers, total_styles=total_styles,
         total_teams=total_teams, total_users=total_users,
@@ -233,7 +295,9 @@ def teams():
         flash('Admin access required.', 'danger')
         return redirect(url_for('dashboard'))
     all_teams = Team.query.all()
-    return render_template('teams.html', teams=all_teams)
+    all_users = User.query.filter_by(is_active=True).order_by(User.full_name).all()
+    all_buyers = Buyer.query.filter_by(is_active=True).order_by(Buyer.name).all()
+    return render_template('teams.html', teams=all_teams, users=all_users, buyers=all_buyers)
 
 
 @app.route('/teams/add', methods=['POST'])
@@ -248,10 +312,85 @@ def add_team():
         flash('Team name already exists.', 'danger')
         return redirect(url_for('teams'))
     team = Team(name=name, description=description)
+    leader_id = request.form.get('leader_id', type=int)
+    if leader_id:
+        team.leader_id = leader_id
     db.session.add(team)
+    db.session.flush()
+    # Members: set their team
+    for uid in request.form.getlist('member_ids'):
+        u = User.query.get(int(uid))
+        if u:
+            u.team_id = team.id
+    # Buyers: the team's buyers
+    for bid in request.form.getlist('buyer_ids'):
+        b = Buyer.query.get(int(bid))
+        if b:
+            team.buyers.append(b)
     db.session.commit()
     flash(f'Team "{name}" created.', 'success')
-    return redirect(url_for('teams'))
+    return redirect(url_for('team_detail', tid=team.id))
+
+
+@app.route('/teams/<int:tid>')
+@login_required
+def team_detail(tid):
+    if not current_user.is_admin:
+        flash('Admin access required.', 'danger')
+        return redirect(url_for('dashboard'))
+    team = Team.query.get_or_404(tid)
+    all_users = User.query.filter_by(is_active=True).order_by(User.full_name).all()
+    all_buyers = Buyer.query.filter_by(is_active=True).order_by(Buyer.name).all()
+    return render_template('team_detail.html', team=team, users=all_users, buyers=all_buyers)
+
+
+@app.route('/teams/<int:tid>/update', methods=['POST'])
+@login_required
+def update_team(tid):
+    if not current_user.is_admin:
+        flash('Admin access required.', 'danger')
+        return redirect(url_for('dashboard'))
+    team = Team.query.get_or_404(tid)
+    team.name = request.form.get('name', team.name).strip()
+    team.description = request.form.get('description', '').strip()
+    team.leader_id = request.form.get('leader_id', type=int)
+    # Members: users ticked belong to this team; unticked members of this team leave it
+    chosen = {int(x) for x in request.form.getlist('member_ids')}
+    for u in User.query.filter_by(team_id=team.id).all():
+        if u.id not in chosen:
+            u.team_id = None
+            # Leaving the team also clears their buyer allocation for this team's buyers
+            u.buyers = [b for b in u.buyers if b not in team.buyers]
+    for uid in chosen:
+        u = User.query.get(uid)
+        if u:
+            u.team_id = team.id
+    # Team buyers
+    team.buyers = [Buyer.query.get(int(bid)) for bid in request.form.getlist('buyer_ids')]
+    team.buyers = [b for b in team.buyers if b is not None]
+    # Drop allocations to buyers no longer in the team
+    for u in User.query.filter_by(team_id=team.id).all():
+        u.buyers = [b for b in u.buyers if b in team.buyers]
+    db.session.commit()
+    flash(f'Team "{team.name}" updated.', 'success')
+    return redirect(url_for('team_detail', tid=tid))
+
+
+@app.route('/teams/<int:tid>/allocate', methods=['POST'])
+@login_required
+def allocate_buyers(tid):
+    if not current_user.is_admin:
+        flash('Admin access required.', 'danger')
+        return redirect(url_for('dashboard'))
+    team = Team.query.get_or_404(tid)
+    # For each member, the ticked buyers (within this team's buyers) are their allocation.
+    # An empty selection = no allocation (member then sees the whole team, per the fallback).
+    for u in User.query.filter_by(team_id=team.id).all():
+        chosen = {int(x) for x in request.form.getlist(f'alloc_{u.id}')}
+        u.buyers = [b for b in team.buyers if b.id in chosen]
+    db.session.commit()
+    flash('Buyer allocation saved.', 'success')
+    return redirect(url_for('team_detail', tid=tid))
 
 
 @app.route('/teams/delete/<int:tid>')
@@ -271,7 +410,11 @@ def delete_team(tid):
 @app.route('/buyers')
 @login_required
 def buyers():
-    all_buyers = Buyer.query.filter_by(is_active=True).order_by(Buyer.name).all()
+    vids = visible_buyer_ids(current_user)
+    q = Buyer.query.filter_by(is_active=True)
+    if vids is not None:
+        q = q.filter(Buyer.id.in_(vids))
+    all_buyers = q.order_by(Buyer.name).all()
     return render_template('buyers.html', buyers=all_buyers)
 
 
@@ -323,24 +466,33 @@ def styles():
     buyer_id = request.args.get('buyer_id', type=int)
     team_id = request.args.get('team_id', type=int)
     status = request.args.get('status', '')
+    po = request.args.get('po', '').strip()
     q = request.args.get('q', '').strip()
 
-    query = Style.query
+    query = visible_styles_query(Style.query, current_user)
     if buyer_id:
         query = query.filter_by(buyer_id=buyer_id)
     if team_id:
         query = query.filter_by(team_id=team_id)
     if status:
         query = query.filter_by(status=status)
+    if po:
+        query = query.filter(Style.po == po)
     if q:
         query = query.filter(Style.style_no.ilike(f'%{q}%') | Style.description.ilike(f'%{q}%') | Style.po.ilike(f'%{q}%'))
 
     all_styles = query.order_by(Style.created_at.desc()).all()
-    all_buyers = Buyer.query.filter_by(is_active=True).order_by(Buyer.name).all()
+    vids = visible_buyer_ids(current_user)
+    bq = Buyer.query.filter_by(is_active=True)
+    if vids is not None:
+        bq = bq.filter(Buyer.id.in_(vids))
+    all_buyers = bq.order_by(Buyer.name).all()
     all_teams = Team.query.all()
+    po_list = sorted({r[0] for r in visible_styles_query(Style.query, current_user).filter(Style.po.isnot(None)).filter(Style.po != '').with_entities(Style.po).distinct().all() if r[0]})
     return render_template('styles.html', styles=all_styles, buyers=all_buyers,
                            teams=all_teams, selected_buyer=buyer_id,
-                           selected_team=team_id, selected_status=status, search_q=q)
+                           selected_team=team_id, selected_status=status, search_q=q,
+                           po_list=po_list, selected_po=po)
 
 
 @app.route('/styles/add', methods=['POST'])
@@ -350,6 +502,10 @@ def add_style():
     po = request.form.get('po', '').strip()
     description = request.form.get('description', '').strip()
     buyer_id = request.form.get('buyer_id', type=int)
+    vids = visible_buyer_ids(current_user)
+    if vids is not None and buyer_id not in vids:
+        flash('You can only add styles for your assigned buyers.', 'danger')
+        return redirect(url_for('styles'))
     team_id = request.form.get('team_id') or None
     season = request.form.get('season', '').strip()
     category = request.form.get('category', '').strip()
@@ -479,7 +635,13 @@ def _get_or_create_team(name):
 
 
 def _import_styles_workbook(wb, user_id):
-    """Parse the active sheet and upsert styles. Returns (added, updated, skipped, remarks_added)."""
+    """Parse the active sheet and upsert styles.
+    Returns (added, updated, skipped, remarks_added, name_only).
+    name_only = [(style_no, po)] for rows skipped only because they have no Buyer
+    (re-importable later by Style Name only)."""
+    _u = User.query.get(user_id)
+    _is_admin = bool(_u and _u.is_admin)
+    _vids = visible_buyer_ids(_u) if _u else set()
     ws = wb.active
     rows = list(ws.iter_rows(values_only=True))
     if not rows:
@@ -505,6 +667,7 @@ def _import_styles_workbook(wb, user_id):
     updated = 0
     remarks_added = 0
     skipped = []
+    name_only = []
     for r in range(header_idx + 1, len(rows)):
         row = rows[r]
         excel_row = r + 1
@@ -525,27 +688,40 @@ def _import_styles_workbook(wb, user_id):
         style_no = str(style_no).strip()
 
         buyer_name = val('buyer')
-        if not buyer_name:
-            skipped.append((excel_row, 'Style ' + style_no + ': no Buyer — row skipped.'))
-            continue
-        buyer = _get_or_create_buyer(buyer_name)
-
         po = val('po')
         po = str(po).strip() if po is not None else ''
+        if not buyer_name:
+            # No Buyer: skipped now, but re-importable later by Style Name only
+            skipped.append((excel_row, 'Style ' + style_no + ': no Buyer — row skipped.'))
+            name_only.append((style_no, po))
+            continue
+        # Buyer access: non-admins can only import for buyers assigned to them
+        _existing = Buyer.query.filter(db.func.lower(Buyer.name) == str(buyer_name).strip().lower()).first()
+        if not _is_admin and (_existing is None or _existing.id not in _vids):
+            skipped.append((excel_row, 'Style ' + style_no + ': Buyer "' + str(buyer_name).strip() + '" is not assigned to you — row skipped.'))
+            continue
+        buyer = _existing or _get_or_create_buyer(buyer_name)
+
         style = Style.query.filter_by(style_no=style_no, buyer_id=buyer.id, po=po).first()
         if style is None:
-            if po:
-                # A PO-less copy exists (imported before PO) — adopt it, don't duplicate
-                style = Style.query.filter_by(style_no=style_no, buyer_id=buyer.id, po='').first()
-            else:
-                # Blank-PO row: update the most recent copy under this Style No + Buyer
-                style = Style.query.filter_by(style_no=style_no, buyer_id=buyer.id).order_by(Style.updated_at.desc()).first()
+            # Adopt a Style-Name-only placeholder for this style (no buyer yet)
+            style = Style.query.filter_by(style_no=style_no, buyer_id=None, po=po).first()
+        if style is None and po:
+            # A PO-less copy exists (imported before PO) — adopt it, don't duplicate
+            style = Style.query.filter_by(style_no=style_no, buyer_id=buyer.id, po='').first()
+        if style is None and po:
+            style = Style.query.filter_by(style_no=style_no, buyer_id=None, po='').first()
+        if style is None and not po:
+            # Blank-PO row: update the most recent copy under this Style No + Buyer
+            style = Style.query.filter_by(style_no=style_no, buyer_id=buyer.id).order_by(Style.updated_at.desc()).first()
         is_new = style is None
         if is_new:
             style = Style(style_no=style_no, buyer_id=buyer.id, po=po, created_by=user_id)
             db.session.add(style)
-        elif po:
-            style.po = po
+        else:
+            style.buyer_id = buyer.id
+            if po:
+                style.po = po
 
         # Only overwrite a field when the cell has a value (blank keeps old value)
         if val('description') is not None:
@@ -593,7 +769,29 @@ def _import_styles_workbook(wb, user_id):
             updated += 1
 
     db.session.commit()
-    return added, updated, skipped, remarks_added
+    return added, updated, skipped, remarks_added, name_only
+
+
+def _import_name_only(pairs, user_id):
+    """Create Style-Name-only placeholders for (style_no, po) pairs.
+    Returns (created, already_there). Skips any pair that already has a style
+    with the same Style No + PO (any buyer) — no duplicates."""
+    created = 0
+    already = 0
+    for style_no, po in pairs:
+        style_no = str(style_no).strip()
+        if not style_no:
+            continue
+        po = str(po).strip() if po else ''
+        existing = Style.query.filter_by(style_no=style_no, po=po).first()
+        if existing is not None:
+            already += 1
+            continue
+        db.session.add(Style(style_no=style_no, buyer_id=None, po=po,
+                             status='Active', created_by=user_id))
+        created += 1
+    db.session.commit()
+    return created, already
 
 
 @app.route('/styles/import', methods=['GET', 'POST'])
@@ -611,22 +809,52 @@ def import_styles():
         try:
             import openpyxl
             wb = openpyxl.load_workbook(f, data_only=True)
-            added, updated, skipped, remarks_added = _import_styles_workbook(wb, current_user.id)
+            added, updated, skipped, remarks_added, name_only = _import_styles_workbook(wb, current_user.id)
         except Exception as e:
             flash('Could not read this file: ' + str(e), 'danger')
             return redirect(url_for('import_styles'))
         result = {'added': added, 'updated': updated, 'skipped': skipped,
-                  'remarks_added': remarks_added,
+                  'remarks_added': remarks_added, 'name_only': name_only,
                   'filename': f.filename}
         flash('Import finished: ' + str(added) + ' added, ' + str(updated) + ' updated, ' + str(len(skipped)) + ' skipped.', 'success' if not skipped else 'warning')
     return render_template('import_styles.html', result=result)
+
+
+@app.route('/styles/import/name-only', methods=['POST'])
+@login_required
+def import_name_only():
+    """Second click: import the skipped styles by Style Name only.
+    Creates buyer-less placeholders that can be completed manually later."""
+    raw = request.form.getlist('pair')
+    pairs = []
+    for item in raw:
+        if '|' in item:
+            sn, po = item.split('|', 1)
+            pairs.append((sn.strip(), po.strip()))
+        elif item.strip():
+            pairs.append((item.strip(), ''))
+    if not pairs:
+        flash('No styles to import.', 'warning')
+        return redirect(url_for('import_styles'))
+    created, already = _import_name_only(pairs, current_user.id)
+    flash(f'Style-Name-only import: {created} created, {already} already existed.', 'success' if created else 'warning')
+    return redirect(url_for('styles'))
 
 
 @app.route('/styles/<int:sid>')
 @login_required
 def style_detail(sid):
     style = Style.query.get_or_404(sid)
-    all_buyers = Buyer.query.filter_by(is_active=True).order_by(Buyer.name).all()
+    vids = visible_buyer_ids(current_user)
+    if vids is not None and not (
+            (style.buyer_id is not None and style.buyer_id in vids) or
+            (style.buyer_id is None and style.created_by == current_user.id)):
+        flash('You do not have access to this style.', 'danger')
+        return redirect(url_for('styles'))
+    bq = Buyer.query.filter_by(is_active=True)
+    if vids is not None:
+        bq = bq.filter(Buyer.id.in_(vids))
+    all_buyers = bq.order_by(Buyer.name).all()
     all_teams = Team.query.all()
     return render_template('style_detail.html', style=style, buyers=all_buyers, teams=all_teams)
 
@@ -635,10 +863,20 @@ def style_detail(sid):
 @login_required
 def edit_style(sid):
     style = Style.query.get_or_404(sid)
+    vids = visible_buyer_ids(current_user)
+    if vids is not None and not (
+            (style.buyer_id is not None and style.buyer_id in vids) or
+            (style.buyer_id is None and style.created_by == current_user.id)):
+        flash('You do not have access to this style.', 'danger')
+        return redirect(url_for('styles'))
+    new_buyer = request.form.get('buyer_id', type=int)
+    if vids is not None and new_buyer is not None and new_buyer not in vids:
+        flash('You can only assign your own buyers.', 'danger')
+        return redirect(url_for('style_detail', sid=sid))
     style.style_no = request.form.get('style_no', style.style_no).strip()
     style.po = request.form.get('po', style.po or '').strip()
     style.description = request.form.get('description', '').strip()
-    style.buyer_id = request.form.get('buyer_id', type=int)
+    style.buyer_id = new_buyer
     style.team_id = request.form.get('team_id') or None
     style.season = request.form.get('season', '').strip()
     style.category = request.form.get('category', '').strip()
@@ -657,6 +895,12 @@ def edit_style(sid):
 @login_required
 def add_comment(sid):
     style = Style.query.get_or_404(sid)
+    vids = visible_buyer_ids(current_user)
+    if vids is not None and not (
+            (style.buyer_id is not None and style.buyer_id in vids) or
+            (style.buyer_id is None and style.created_by == current_user.id)):
+        flash('You do not have access to this style.', 'danger')
+        return redirect(url_for('styles'))
     comment_text = request.form.get('comment', '').strip()
     comment_type = request.form.get('comment_type', 'General')
     if not comment_text:
@@ -674,8 +918,14 @@ def add_comment(sid):
 @app.route('/reports')
 @login_required
 def reports():
-    buyers = Buyer.query.filter_by(is_active=True).order_by(Buyer.name).all()
+    vids = visible_buyer_ids(current_user)
+    bq = Buyer.query.filter_by(is_active=True)
+    if vids is not None:
+        bq = bq.filter(Buyer.id.in_(vids))
+    buyers = bq.order_by(Buyer.name).all()
     teams = Team.query.all()
+    po_q = visible_styles_query(Style.query, current_user).filter(Style.po.isnot(None)).filter(Style.po != '')
+    po_list = sorted({r[0] for r in po_q.with_entities(Style.po).distinct().all() if r[0]})
     report_files = []
     if os.path.exists(REPORT_DIR):
         for f in os.listdir(REPORT_DIR):
@@ -686,7 +936,7 @@ def reports():
                 'modified': datetime.fromtimestamp(os.path.getmtime(fp)).strftime('%Y-%m-%d %H:%M')
             })
     report_files.sort(key=lambda x: x['modified'], reverse=True)
-    return render_template('reports.html', buyers=buyers, teams=teams, report_files=report_files)
+    return render_template('reports.html', buyers=buyers, teams=teams, report_files=report_files, po_list=po_list)
 
 
 @app.route('/reports/generate', methods=['POST'])
@@ -696,15 +946,25 @@ def generate_report():
     buyer_id = request.form.get('buyer_id', type=int)
     team_id = request.form.get('team_id', type=int)
     status = request.form.get('status', '')
+    po_filter = request.form.get('po', '').strip()
+    style_no_filter = request.form.get('style_no', '').strip()
     include_comments = request.form.get('include_comments') == 'on'
 
-    query = Style.query
+    query = visible_styles_query(Style.query, current_user)
     if buyer_id:
+        vids = visible_buyer_ids(current_user)
+        if vids is not None and buyer_id not in vids:
+            flash('You can only report on your assigned buyers.', 'danger')
+            return redirect(url_for('reports'))
         query = query.filter_by(buyer_id=buyer_id)
     if team_id:
         query = query.filter_by(team_id=team_id)
     if status:
         query = query.filter_by(status=status)
+    if po_filter:
+        query = query.filter(Style.po.ilike(f'%{po_filter}%'))
+    if style_no_filter:
+        query = query.filter(Style.style_no.ilike(f'%{style_no_filter}%'))
     styles_data = query.order_by(Style.buyer_id, Style.style_no).all()
 
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -713,14 +973,13 @@ def generate_report():
         filename = f'SCM_Report_{timestamp}.xlsx'
         filepath = os.path.join(REPORT_DIR, filename)
         _generate_excel(styles_data, filepath, include_comments)
-        flash(f'Excel report generated: {filename}', 'success')
     else:
         filename = f'SCM_Report_{timestamp}.pdf'
         filepath = os.path.join(REPORT_DIR, filename)
         _generate_pdf(styles_data, filepath, include_comments)
-        flash(f'PDF report generated: {filename}', 'success')
 
-    return redirect(url_for('reports'))
+    # Auto-download: the file downloads straight away (a copy stays in Reports)
+    return send_file(filepath, as_attachment=True, download_name=filename)
 
 
 @app.route('/reports/download/<filename>', methods=['GET', 'POST'])
@@ -762,42 +1021,68 @@ def _generate_excel(styles_data, filepath, include_comments=False):
     ws = wb.active
     ws.title = "Style Report"
 
-    # Header
-    header_fill = PatternFill("solid", fgColor="1a3c5e")
+    navy = "1a3c5e"
+    header_fill = PatternFill("solid", fgColor=navy)
     header_font = Font(bold=True, color="FFFFFF", size=11)
+    title_font = Font(bold=True, color=navy, size=15)
+    sub_font = Font(color="555555", size=10)
     thin = Side(style='thin', color='CCCCCC')
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    alt_fill = PatternFill("solid", fgColor="EBF3FB")
+    total_fill = PatternFill("solid", fgColor="D9E6F2")
+    total_font = Font(bold=True, size=11)
+    status_fill = {
+        'Completed': PatternFill("solid", fgColor="D5F5E3"),
+        'On Hold': PatternFill("solid", fgColor="FDEBD0"),
+        'Cancelled': PatternFill("solid", fgColor="FADBD8"),
+        'Active': PatternFill("solid", fgColor="D6EAF8"),
+    }
 
-    headers = ['#', 'Style No', 'Description', 'Buyer', 'Team', 'Season',
+    headers = ['#', 'Style No', 'PO', 'Description', 'Buyer', 'Team', 'Season',
                'Category', 'Fabric', 'Color', 'Quantity', 'Unit Price ($)',
                'Total Value ($)', 'Status', 'Created At']
     if include_comments:
-        headers.append('Latest Comment')
+        headers.append('Remark (Latest Comment)')
+    ncols = len(headers)
 
+    # Title + generated line
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncols)
+    c = ws.cell(row=1, column=1, value='Supply Chain Management \u2014 Style Report')
+    c.font = title_font
+    c.alignment = Alignment(horizontal='left', vertical='center')
+    ws.row_dimensions[1].height = 26
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=ncols)
+    c = ws.cell(row=2, column=1,
+               value=f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}  |  Total Styles: {len(styles_data)}")
+    c.font = sub_font
+    c.alignment = Alignment(horizontal='left', vertical='center')
+    ws.row_dimensions[2].height = 18
+
+    # Header row (row 3)
     for col, h in enumerate(headers, 1):
-        cell = ws.cell(row=1, column=col, value=h)
+        cell = ws.cell(row=3, column=col, value=h)
         cell.font = header_font
         cell.fill = header_fill
-        cell.alignment = Alignment(horizontal='center', vertical='center')
+        cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
         cell.border = border
+    ws.row_dimensions[3].height = 28
 
-    ws.row_dimensions[1].height = 25
-
-    alt_fill = PatternFill("solid", fgColor="EBF3FB")
-    for row_idx, style in enumerate(styles_data, 2):
-        fill = alt_fill if row_idx % 2 == 0 else PatternFill()
+    # Data rows from row 4
+    for i, style in enumerate(styles_data):
+        row_idx = 4 + i
+        fill = alt_fill if i % 2 == 1 else PatternFill()
         total_val = (style.quantity or 0) * (style.unit_price or 0)
         latest_comment = ''
         if include_comments and style.comments:
-            latest_comment = style.comments[0].comment[:200]
+            latest_comment = style.comments[0].comment or ''
         row_data = [
-            row_idx - 1, style.style_no, style.description or '',
+            i + 1, style.style_no, style.po or '', style.description or '',
             style.buyer.name if style.buyer else '',
             style.team.name if style.team else '',
             style.season or '', style.category or '', style.fabric or '',
             style.color or '', style.quantity or 0, style.unit_price or 0,
             round(total_val, 2), style.status,
-            style.created_at.strftime('%Y-%m-%d')
+            style.created_at.strftime('%Y-%m-%d') if style.created_at else ''
         ]
         if include_comments:
             row_data.append(latest_comment)
@@ -806,30 +1091,93 @@ def _generate_excel(styles_data, filepath, include_comments=False):
             cell.fill = fill
             cell.border = border
             cell.alignment = Alignment(vertical='center', wrap_text=True)
+            if headers[col - 1] == 'Quantity':
+                cell.alignment = Alignment(horizontal='right', vertical='center')
+                cell.number_format = '#,##0'
+            if headers[col - 1] in ('Unit Price ($)', 'Total Value ($)'):
+                cell.alignment = Alignment(horizontal='right', vertical='center')
+                cell.number_format = '"$"#,##0.00'
+        sc = ws.cell(row=row_idx, column=headers.index('Status') + 1)
+        if style.status in status_fill:
+            sc.fill = status_fill[style.status]
 
-    # Auto-width
-    for col in range(1, len(headers) + 1):
-        max_len = 0
-        for row in ws.iter_rows(min_col=col, max_col=col):
-            for cell in row:
-                if cell.value:
-                    max_len = max(max_len, len(str(cell.value)))
-        ws.column_dimensions[get_column_letter(col)].width = min(max(max_len + 2, 10), 40)
+    # Totals row
+    tr = 4 + len(styles_data)
+    total_qty = sum(s.quantity or 0 for s in styles_data)
+    total_val = sum((s.quantity or 0) * (s.unit_price or 0) for s in styles_data)
+    for col in range(1, ncols + 1):
+        cell = ws.cell(row=tr, column=col)
+        cell.fill = total_fill
+        cell.border = border
+        cell.font = total_font
+    ws.cell(row=tr, column=1, value='TOTAL').alignment = Alignment(horizontal='center', vertical='center')
+    qty_col = headers.index('Quantity') + 1
+    tot_col = headers.index('Total Value ($)') + 1
+    c = ws.cell(row=tr, column=qty_col, value=total_qty)
+    c.number_format = '#,##0'
+    c.alignment = Alignment(horizontal='right', vertical='center')
+    c = ws.cell(row=tr, column=tot_col, value=round(total_val, 2))
+    c.number_format = '"$"#,##0.00'
+    c.alignment = Alignment(horizontal='right', vertical='center')
+    ws.row_dimensions[tr].height = 22
 
-    # Summary sheet
+    # Column widths
+    widths = {'#': 5, 'Style No': 16, 'PO': 14, 'Description': 28, 'Buyer': 18,
+              'Team': 14, 'Season': 10, 'Category': 14, 'Fabric': 14, 'Color': 12,
+              'Quantity': 11, 'Unit Price ($)': 13, 'Total Value ($)': 14,
+              'Status': 11, 'Created At': 12, 'Remark (Latest Comment)': 45}
+    for col, h in enumerate(headers, 1):
+        ws.column_dimensions[get_column_letter(col)].width = widths.get(h, 14)
+
+    ws.freeze_panes = 'A4'
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.page_setup.orientation = 'landscape'
+    ws.page_setup.paperSize = ws.PAPERSIZE_A4
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.print_title_rows = '1:3'
+
+    # Summary sheet (with buyer-wise breakdown)
     ws2 = wb.create_sheet("Summary")
     ws2['A1'] = 'Supply Chain Management - Summary Report'
-    ws2['A1'].font = Font(bold=True, size=14, color="1a3c5e")
+    ws2['A1'].font = Font(bold=True, size=14, color=navy)
     ws2['A3'] = 'Generated:'
     ws2['B3'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     ws2['A4'] = 'Total Styles:'
     ws2['B4'] = len(styles_data)
-    total_qty = sum(s.quantity or 0 for s in styles_data)
-    total_val = sum((s.quantity or 0) * (s.unit_price or 0) for s in styles_data)
     ws2['A5'] = 'Total Quantity:'
     ws2['B5'] = total_qty
     ws2['A6'] = 'Total Value ($):'
     ws2['B6'] = round(total_val, 2)
+    for r in range(3, 7):
+        ws2.cell(row=r, column=1).font = Font(bold=True)
+    # Buyer-wise breakdown
+    ws2['A8'] = 'Buyer-wise breakdown'
+    ws2['A8'].font = Font(bold=True, size=12, color=navy)
+    for j, h in enumerate(['Buyer', 'Styles', 'Quantity', 'Value ($)'], 1):
+        cell = ws2.cell(row=9, column=j, value=h)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.border = border
+    by_buyer = {}
+    for s in styles_data:
+        b = s.buyer.name if s.buyer else '(No Buyer)'
+        d = by_buyer.setdefault(b, [0, 0, 0.0])
+        d[0] += 1
+        d[1] += s.quantity or 0
+        d[2] += (s.quantity or 0) * (s.unit_price or 0)
+    for i, (b, (cnt, qty, val)) in enumerate(sorted(by_buyer.items())):
+        r = 10 + i
+        ws2.cell(row=r, column=1, value=b).border = border
+        ws2.cell(row=r, column=2, value=cnt).border = border
+        ws2.cell(row=r, column=3, value=qty).border = border
+        c = ws2.cell(row=r, column=4, value=round(val, 2))
+        c.border = border
+        c.number_format = '"$"#,##0.00'
+    ws2.column_dimensions['A'].width = 30
+    ws2.column_dimensions['B'].width = 12
+    ws2.column_dimensions['C'].width = 14
+    ws2.column_dimensions['D'].width = 16
 
     wb.save(filepath)
 
@@ -840,74 +1188,92 @@ def _generate_pdf(styles_data, filepath, include_comments=False):
     from reportlab.lib.units import cm
     from reportlab.lib import colors
     from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-    from reportlab.lib.enums import TA_CENTER, TA_LEFT
+    from reportlab.lib.enums import TA_LEFT
+
+    def _footer(canvas, doc):
+        canvas.saveState()
+        canvas.setFont('Helvetica', 8)
+        canvas.setFillColor(colors.HexColor('#888888'))
+        canvas.drawCentredString(doc.pagesize[0] / 2, 0.9 * cm,
+                                 f'Supply Chain Management  |  Page {doc.page}')
+        canvas.restoreState()
 
     doc = SimpleDocTemplate(filepath, pagesize=landscape(A4),
-                            leftMargin=1*cm, rightMargin=1*cm,
-                            topMargin=1.5*cm, bottomMargin=1.5*cm)
+                            leftMargin=1 * cm, rightMargin=1 * cm,
+                            topMargin=1.2 * cm, bottomMargin=1.4 * cm)
     styles = getSampleStyleSheet()
     elements = []
 
-    title_style = ParagraphStyle('Title', parent=styles['Title'],
-                                  fontSize=16, textColor=colors.HexColor('#1a3c5e'),
-                                  spaceAfter=6)
-    elements.append(Paragraph('Supply Chain Management Report', title_style))
-    elements.append(Paragraph(f'Generated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}',
-                               styles['Normal']))
-    elements.append(Spacer(1, 0.5*cm))
+    title_style = ParagraphStyle('Title2', parent=styles['Title'],
+                                 fontSize=16, textColor=colors.HexColor('#1a3c5e'),
+                                 spaceAfter=4, alignment=TA_LEFT)
+    sub_style = ParagraphStyle('Sub', parent=styles['Normal'],
+                               fontSize=9, textColor=colors.HexColor('#555555'),
+                               spaceAfter=2)
+    total_qty = sum(s.quantity or 0 for s in styles_data)
+    total_val = sum((s.quantity or 0) * (s.unit_price or 0) for s in styles_data)
+    elements.append(Paragraph('Supply Chain Management \u2014 Style Report', title_style))
+    elements.append(Paragraph(
+        f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')} &nbsp;|&nbsp; "
+        f"<b>Total Styles:</b> {len(styles_data)} &nbsp;|&nbsp; "
+        f"<b>Total Qty:</b> {total_qty:,} &nbsp;|&nbsp; "
+        f"<b>Total Value:</b> ${total_val:,.2f}", sub_style))
+    elements.append(Spacer(1, 0.4 * cm))
 
-    headers = ['#', 'Style No', 'Buyer', 'Season', 'Category', 'Qty', 'Price ($)', 'Status']
+    pstyle = ParagraphStyle('Cell', parent=styles['Normal'], fontSize=8, leading=10)
+    pstyle_b = ParagraphStyle('CellB', parent=pstyle, fontName='Helvetica-Bold')
+    headers = ['#', 'Style No', 'PO', 'Buyer', 'Season', 'Category', 'Qty', 'Price ($)', 'Total ($)', 'Status']
     if include_comments:
-        headers.append('Comment')
+        headers.append('Remark')
 
-    table_data = [headers]
+    table_data = [[Paragraph(f'<b>{h}</b>', ParagraphStyle('H', parent=pstyle, textColor=colors.white)) for h in headers]]
     for idx, style in enumerate(styles_data, 1):
         row = [
-            str(idx), style.style_no,
+            str(idx), style.style_no, style.po or '',
             style.buyer.name if style.buyer else '',
             style.season or '', style.category or '',
-            str(style.quantity or 0), f'{style.unit_price or 0:.2f}',
+            f"{style.quantity or 0:,}", f"{style.unit_price or 0:.2f}",
+            f"{(style.quantity or 0) * (style.unit_price or 0):,.2f}",
             style.status
         ]
-        if include_comments and style.comments:
-            row.append(style.comments[0].comment[:80] + ('...' if len(style.comments[0].comment) > 80 else ''))
-        elif include_comments:
-            row.append('')
-        table_data.append(row)
-
-    col_widths = [1*cm, 3*cm, 4*cm, 2.5*cm, 3*cm, 1.5*cm, 2*cm, 2.5*cm]
+        if include_comments:
+            row.append(style.comments[0].comment if style.comments else '')
+        table_data.append([Paragraph(str(v), pstyle) for v in row])
+    # Totals row
+    tot_row = ['', '', '', '', '', '', f"<b>{total_qty:,}</b>", '', f"<b>${total_val:,.2f}</b>", '']
     if include_comments:
-        col_widths.append(5*cm)
+        tot_row.append('')
+    table_data.append([Paragraph(v, pstyle_b) if v else Paragraph('', pstyle) for v in tot_row])
+
+    col_widths = [0.9 * cm, 2.8 * cm, 2.4 * cm, 3.4 * cm, 2.2 * cm, 2.6 * cm, 1.6 * cm, 1.8 * cm, 2.0 * cm, 2.2 * cm]
+    if include_comments:
+        col_widths.append(4.5 * cm)
 
     table = Table(table_data, colWidths=col_widths, repeatRows=1)
-    table.setStyle(TableStyle([
+    style_cmds = [
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1a3c5e')),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
         ('FONTSIZE', (0, 0), (-1, 0), 9),
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#EBF3FB')]),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.white, colors.HexColor('#EBF3FB')]),
         ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
         ('FONTSIZE', (0, 1), (-1, -1), 8),
-        ('ROWHEIGHT', (0, 0), (-1, -1), 18),
-    ]))
+        ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#D9E6F2')),
+        ('LINEABOVE', (0, -1), (-1, -1), 1, colors.HexColor('#1a3c5e')),
+        ('TOPPADDING', (0, 0), (-1, -1), 3),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+    ]
+    table.setStyle(TableStyle(style_cmds))
     elements.append(table)
-
-    # Summary
-    elements.append(Spacer(1, 0.5*cm))
-    total_qty = sum(s.quantity or 0 for s in styles_data)
-    total_val = sum((s.quantity or 0) * (s.unit_price or 0) for s in styles_data)
-    elements.append(Paragraph(f'<b>Total Styles:</b> {len(styles_data)} | <b>Total Qty:</b> {total_qty} | <b>Total Value:</b> ${total_val:,.2f}',
-                               styles['Normal']))
-    doc.build(elements)
-
+    doc.build(elements, onFirstPage=_footer, onLaterPages=_footer)
 
 # ─── Init DB & Run ────────────────────────────────────────────────────────────
 def init_db():
     with app.app_context():
         db.create_all()
-        # Lightweight migration: add the PO column on existing installs
+        # Lightweight migrations for existing installs
         try:
             from sqlalchemy import inspect as _sa_inspect, text as _sa_text
             _cols = [c['name'] for c in _sa_inspect(db.engine).get_columns('style')]
@@ -915,8 +1281,18 @@ def init_db():
                 with db.engine.begin() as _conn:
                     _conn.execute(_sa_text('ALTER TABLE style ADD COLUMN po VARCHAR(100)'))
                     _conn.execute(_sa_text("UPDATE style SET po = '' WHERE po IS NULL"))
+            # Team leader column
+            _tcols = [c['name'] for c in _sa_inspect(db.engine).get_columns('team')]
+            if 'leader_id' not in _tcols:
+                with db.engine.begin() as _conn:
+                    _conn.execute(_sa_text('ALTER TABLE team ADD COLUMN leader_id INTEGER REFERENCES "user"(id)'))
+            # Buyer optional on styles (Style-Name-only placeholders)
+            _scols = {c['name']: c for c in _sa_inspect(db.engine).get_columns('style')}
+            if _scols.get('buyer_id', {}).get('nullable') is False:
+                with db.engine.begin() as _conn:
+                    _conn.execute(_sa_text('ALTER TABLE style ALTER COLUMN buyer_id DROP NOT NULL'))
         except Exception as _e:
-            print(f"Warning during PO migration: {_e}")
+            print(f"Warning during migration: {_e}")
         # Create default admin if not exists
         if not User.query.filter_by(username='admin').first():
             admin = User(username='admin', full_name='Administrator (Boss)', role='admin', is_active=True)
