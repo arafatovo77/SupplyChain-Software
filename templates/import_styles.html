@@ -96,6 +96,20 @@
         {% else %}
         <p class="text-muted mb-0">No rows were skipped — everything imported cleanly.</p>
         {% endif %}
+        {% if result.name_only %}
+        <div class="alert alert-warning mt-3 mb-0">
+          <strong>{{ result.name_only|length }} style(s) had no Buyer</strong> — they were not imported.
+          You can add them by Style Name only now, and fill in the Buyer and other details later.
+          <form action="{{ url_for('import_name_only') }}" method="POST" class="mt-2">
+            {% for sn, po in result.name_only %}
+            <input type="hidden" name="pair" value="{{ sn }}|{{ po }}">
+            {% endfor %}
+            <button type="submit" class="btn btn-warning btn-sm fw-semibold">
+              <i class="fas fa-plus me-1"></i> Import {{ result.name_only|length }} by Style Name only
+            </button>
+          </form>
+        </div>
+        {% endif %}
         <div class="mt-3">
           <a href="{{ url_for('styles') }}" class="btn btn-primary btn-sm">
             <i class="fas fa-eye me-1"></i> View Styles
