@@ -708,171 +708,208 @@ def _get_or_create_team(name):
 
 
 def _import_styles_workbook(wb, user_id):
-    """Parse the active sheet and upsert styles.
-    Returns (added, updated, skipped, remarks_added, name_only).
+    """Parse EVERY sheet in the file (each dated list) and upsert styles.
+    Streams rows (low memory) and commits every 500 rows so a big
+    multi-sheet file cannot exhaust the server's memory.
+    Returns (added, updated, skipped, remarks_added, name_only, sheets_done).
+    Sheets with no usable heading row (e.g. empty sheets) are skipped silently.
     name_only = [(style_no, po)] for rows skipped only because they have no Buyer
     (re-importable later by Style Name only)."""
     _u = User.query.get(user_id)
     _is_admin = bool(_u and _u.is_admin)
     _vids = visible_buyer_ids(_u) if _u else set()
-    ws = wb.active
-    rows = list(ws.iter_rows(values_only=True))
-    if not rows:
-        return 0, 0, [('—', 'Empty file — no rows found.')], 0
-
-    # Find the header row (scan first 3 rows)
-    header_idx = None
-    colmap = {}
-    for i in range(min(3, len(rows))):
-        mapping = {}
-        for j, cell in enumerate(rows[i]):
-            field = IMPORT_HEADERS.get(_norm_header(cell))
-            if field and field not in mapping:
-                mapping[field] = j
-        if 'style_no' in mapping or len(mapping) >= 2:
-            header_idx = i
-            colmap = mapping
-            break
-    if header_idx is None or 'style_no' not in colmap:
-        return 0, 0, [('—', 'No heading row found. The file needs a heading row with at least a "Style No" column (e.g. Style No, Buyer, Quantity, Unit Price).')], 0
-
     added = 0
     updated = 0
     remarks_added = 0
     skipped = []
     name_only = []
-    for r in range(header_idx + 1, len(rows)):
-        row = rows[r]
-        excel_row = r + 1
+    sheets_done = []
+    # Cache buyer/team IDs (plain ints) so a big multi-sheet file stays fast.
+    # IDs stay valid after expunge_all(); ORM objects would go detached.
+    _buyer_cache = {}
+    _team_cache = {}
 
-        def val(field):
-            j = colmap.get(field)
-            if j is None or j >= len(row):
-                return None
-            v = row[j]
-            if isinstance(v, str):
-                v = v.strip()
-                return v if v else None
-            return v
+    def _buyer_id(name):
+        key = str(name).strip().lower()
+        if key not in _buyer_cache:
+            _b = Buyer.query.filter(db.func.lower(Buyer.name) == key).first()
+            _buyer_cache[key] = _b.id if _b else None
+        return _buyer_cache[key]
 
-        style_no = val('style_no')
-        if style_no is None:
-            continue  # blank row — ignore silently
-        style_no = str(style_no).strip()
+    def _team_id(name):
+        key = str(name).strip()
+        if key not in _team_cache:
+            _team_cache[key] = _get_or_create_team(key).id
+        return _team_cache[key]
 
-        buyer_name = val('buyer')
-        po = val('po')
-        po = str(po).strip() if po is not None else ''
-        if not buyer_name:
-            # No Buyer: skipped now, but re-importable later by Style Name only
-            skipped.append((excel_row, 'Style ' + style_no + ': no Buyer — row skipped.'))
-            name_only.append((style_no, po))
-            continue
-        # Buyer access: non-admins can only import for buyers assigned to them
-        _existing = Buyer.query.filter(db.func.lower(Buyer.name) == str(buyer_name).strip().lower()).first()
-        if not _is_admin and (_existing is None or _existing.id not in _vids):
-            skipped.append((excel_row, 'Style ' + style_no + ': Buyer "' + str(buyer_name).strip() + '" is not assigned to you — row skipped.'))
-            continue
-        buyer = _existing or _get_or_create_buyer(buyer_name)
+    import itertools as _it
+    for ws in wb.worksheets:
+        _iter = ws.iter_rows(values_only=True)
+        # Peek at the first 3 rows to find the heading row
+        _head = []
+        for _ in range(3):
+            try:
+                _head.append(next(_iter))
+            except StopIteration:
+                break
+        header_idx = None
+        colmap = {}
+        for i, _r in enumerate(_head):
+            mapping = {}
+            for j, cell in enumerate(_r):
+                field = IMPORT_HEADERS.get(_norm_header(cell))
+                if field and field not in mapping:
+                    mapping[field] = j
+            if 'style_no' in mapping or len(mapping) >= 2:
+                header_idx = i
+                colmap = mapping
+                break
+        if header_idx is None or 'style_no' not in colmap:
+            continue  # no usable heading row on this sheet — skip it
+        sheets_done.append(ws.title)
+        # Data rows = peeked rows after the header, then the rest of the sheet
+        _data = _it.chain(_head[header_idx + 1:], _iter)
+        _row_no = header_idx + 1  # 0-based index of the next row
+        for row in _data:
+            _row_no += 1
+            excel_row = _row_no + 1
 
-        style = Style.query.filter_by(style_no=style_no, buyer_id=buyer.id, po=po).first()
-        if style is None:
-            # Adopt a Style-Name-only placeholder for this style (no buyer yet)
-            style = Style.query.filter_by(style_no=style_no, buyer_id=None, po=po).first()
-        if style is None and po:
-            # A PO-less copy exists (imported before PO) — adopt it, don't duplicate
-            style = Style.query.filter_by(style_no=style_no, buyer_id=buyer.id, po='').first()
-        if style is None and po:
-            style = Style.query.filter_by(style_no=style_no, buyer_id=None, po='').first()
-        if style is None and not po:
-            # Blank-PO row: update the most recent copy under this Style No + Buyer
-            style = Style.query.filter_by(style_no=style_no, buyer_id=buyer.id).order_by(Style.updated_at.desc()).first()
-        is_new = style is None
-        if is_new:
-            style = Style(style_no=style_no, buyer_id=buyer.id, po=po, created_by=user_id)
-            db.session.add(style)
-        else:
-            style.buyer_id = buyer.id
-            if po:
-                style.po = po
+            def val(field):
+                j = colmap.get(field)
+                if j is None or j >= len(row):
+                    return None
+                v = row[j]
+                if isinstance(v, str):
+                    v = v.strip()
+                    return v if v else None
+                return v
 
-        # Only overwrite a field when the cell has a value (blank keeps old value)
-        if val('description') is not None:
-            style.description = str(val('description'))
-        if val('team') is not None:
-            style.team_id = _get_or_create_team(val('team')).id
-        if val('season') is not None:
-            style.season = str(val('season'))
-        if val('category') is not None:
-            style.category = str(val('category'))
-        if val('fabric') is not None:
-            style.fabric = str(val('fabric'))
-        if val('color') is not None:
-            style.color = str(val('color'))
-        qty = _to_int(val('quantity'))
-        if qty is not None:
-            style.quantity = qty
-        price = _to_float(val('unit_price'))
-        if price is not None:
-            style.unit_price = price
-        # Office-report fields (only overwrite when the cell has a value)
-        _txt = {'merchandiser': 'merchandiser', 'store_ref': 'store_ref',
-                'fab_sr': 'fab_sr', 'cutt_name': 'cutt_name', 'line': 'line',
-                'pp_status': 'pp_status'}
-        for _f, _k in _txt.items():
-            _v = _to_str(val(_k))
-            if _v is not None:
-                setattr(style, _f, _v)
-        _dates = ['etd', 'created_date', 'fabric_tna', 'logic_tna', 'pcd',
-                  'lock_plan', 'input_start', 'sewing_end', 'ship_date']
-        for _f in _dates:
-            _v = _to_str(val(_f))
-            if _v is not None:
-                setattr(style, _f, _v)
-        _ints = ['lead_time', 'fab_lead_time', 'rmg_lead_time', 'run_day',
-                 'cutting_qty', 'sewing_qty', 'wash', 'print_qty', 'emb']
-        for _f in _ints:
-            _v = _to_int(val(_f))
-            if _v is not None:
-                setattr(style, _f, _v)
-        _smv = _to_float(val('smv'))
-        if _smv is not None:
-            style.smv = _smv
-        _fb = _to_float(val('fabric_booking'))
-        if _fb is not None:
-            style.fabric_booking = _fb
-        _fr = _to_float(val('fabric_rcv'))
-        if _fr is not None:
-            style.fabric_rcv = _fr
-        status = val('status')
-        if status is not None:
-            status = str(status).strip().title()
-            if status in VALID_STATUSES:
-                style.status = status
-            elif is_new:
+            style_no = val('style_no')
+            if style_no is None:
+                continue  # blank row — ignore silently
+            style_no = str(style_no).strip()
+
+            buyer_name = val('buyer')
+            po = val('po')
+            po = str(po).strip() if po is not None else ''
+            if not buyer_name:
+                # No Buyer: skipped now, but re-importable later by Style Name only
+                skipped.append((excel_row, 'Style ' + style_no + ': no Buyer — row skipped.'))
+                name_only.append((style_no, po))
+                continue
+            # Buyer access: non-admins can only import for buyers assigned to them
+            _bid = _buyer_id(buyer_name)
+            if not _is_admin and (_bid is None or _bid not in _vids):
+                skipped.append((excel_row, 'Style ' + style_no + ': Buyer "' + str(buyer_name).strip() + '" is not assigned to you — row skipped.'))
+                continue
+            if _bid is None:
+                _bid = _get_or_create_buyer(buyer_name).id
+                _buyer_cache[str(buyer_name).strip().lower()] = _bid
+            buyer_id = _bid
+
+            style = Style.query.filter_by(style_no=style_no, buyer_id=buyer_id, po=po).first()
+            if style is None:
+                # Adopt a Style-Name-only placeholder for this style (no buyer yet)
+                style = Style.query.filter_by(style_no=style_no, buyer_id=None, po=po).first()
+            if style is None and po:
+                # A PO-less copy exists (imported before PO) — adopt it, don't duplicate
+                style = Style.query.filter_by(style_no=style_no, buyer_id=buyer_id, po='').first()
+            if style is None and po:
+                style = Style.query.filter_by(style_no=style_no, buyer_id=None, po='').first()
+            if style is None and not po:
+                # Blank-PO row: update the most recent copy under this Style No + Buyer
+                style = Style.query.filter_by(style_no=style_no, buyer_id=buyer_id).order_by(Style.updated_at.desc()).first()
+            is_new = style is None
+            if is_new:
+                style = Style(style_no=style_no, buyer_id=buyer_id, po=po, created_by=user_id)
+                db.session.add(style)
+            else:
+                style.buyer_id = buyer_id
+                if po:
+                    style.po = po
+
+            # Only overwrite a field when the cell has a value (blank keeps old value)
+            if val('description') is not None:
+                style.description = str(val('description'))
+            if val('team') is not None:
+                style.team_id = _team_id(val('team'))
+            if val('season') is not None:
+                style.season = str(val('season'))
+            if val('category') is not None:
+                style.category = str(val('category'))
+            if val('fabric') is not None:
+                style.fabric = str(val('fabric'))
+            if val('color') is not None:
+                style.color = str(val('color'))
+            qty = _to_int(val('quantity'))
+            if qty is not None:
+                style.quantity = qty
+            price = _to_float(val('unit_price'))
+            if price is not None:
+                style.unit_price = price
+            # Office-report fields (only overwrite when the cell has a value)
+            _txt = {'merchandiser': 'merchandiser', 'store_ref': 'store_ref',
+                    'fab_sr': 'fab_sr', 'cutt_name': 'cutt_name', 'line': 'line',
+                    'pp_status': 'pp_status'}
+            for _f, _k in _txt.items():
+                _v = _to_str(val(_k))
+                if _v is not None:
+                    setattr(style, _f, _v)
+            _dates = ['etd', 'created_date', 'fabric_tna', 'logic_tna', 'pcd',
+                      'lock_plan', 'input_start', 'sewing_end', 'ship_date']
+            for _f in _dates:
+                _v = _to_str(val(_f))
+                if _v is not None:
+                    setattr(style, _f, _v)
+            _ints = ['lead_time', 'fab_lead_time', 'rmg_lead_time', 'run_day',
+                     'cutting_qty', 'sewing_qty', 'wash', 'print_qty', 'emb']
+            for _f in _ints:
+                _v = _to_int(val(_f))
+                if _v is not None:
+                    setattr(style, _f, _v)
+            _smv = _to_float(val('smv'))
+            if _smv is not None:
+                style.smv = _smv
+            _fb = _to_float(val('fabric_booking'))
+            if _fb is not None:
+                style.fabric_booking = _fb
+            _fr = _to_float(val('fabric_rcv'))
+            if _fr is not None:
+                style.fabric_rcv = _fr
+            status = val('status')
+            if status is not None:
+                status = str(status).strip().title()
+                if status in VALID_STATUSES:
+                    style.status = status
+                elif is_new:
+                    style.status = 'Active'
+            if is_new and not style.status:
                 style.status = 'Active'
-        if is_new and not style.status:
-            style.status = 'Active'
 
-        db.session.flush()
+            db.session.flush()
 
-        remark = val('remark')
-        if remark is not None:
-            remark = str(remark).strip()
-            latest = style.comments[0].comment if style.comments else None
-            if remark and remark != latest:
-                db.session.add(StyleComment(style_id=style.id, user_id=user_id,
-                                            comment=remark, comment_type='General'))
-                remarks_added += 1
+            remark = val('remark')
+            if remark is not None:
+                remark = str(remark).strip()
+                latest = style.comments[0].comment if style.comments else None
+                if remark and remark != latest:
+                    db.session.add(StyleComment(style_id=style.id, user_id=user_id,
+                                                comment=remark, comment_type='General'))
+                    remarks_added += 1
 
-        if is_new:
-            added += 1
-        else:
-            updated += 1
+            if is_new:
+                added += 1
+            else:
+                updated += 1
+            # Commit in batches so a huge file never holds one giant transaction.
+            # (No expunge_all: it would detach objects the caller still holds.)
+            if (added + updated) % 500 == 0:
+                db.session.commit()
 
+    if not sheets_done:
+        return 0, 0, [('—', 'No heading row found. The file needs a heading row with at least a "Style No" column (e.g. Style No, Buyer, Quantity, Unit Price).')], 0, [], []
     db.session.commit()
-    return added, updated, skipped, remarks_added, name_only
-
+    return added, updated, skipped, remarks_added, name_only, sheets_done
 
 def _import_name_only(pairs, user_id):
     """Create Style-Name-only placeholders for (style_no, po) pairs.
@@ -910,14 +947,14 @@ def import_styles():
             return redirect(url_for('import_styles'))
         try:
             import openpyxl
-            wb = openpyxl.load_workbook(f, data_only=True)
-            added, updated, skipped, remarks_added, name_only = _import_styles_workbook(wb, current_user.id)
+            wb = openpyxl.load_workbook(f, data_only=True, read_only=True)
+            added, updated, skipped, remarks_added, name_only, sheets_done = _import_styles_workbook(wb, current_user.id)
         except Exception as e:
             flash('Could not read this file: ' + str(e), 'danger')
             return redirect(url_for('import_styles'))
         result = {'added': added, 'updated': updated, 'skipped': skipped,
                   'remarks_added': remarks_added, 'name_only': name_only,
-                  'filename': f.filename}
+                  'sheets': sheets_done, 'filename': f.filename}
         flash('Import finished: ' + str(added) + ' added, ' + str(updated) + ' updated, ' + str(len(skipped)) + ' skipped.', 'success' if not skipped else 'warning')
     return render_template('import_styles.html', result=result)
 
@@ -1026,8 +1063,12 @@ def reports():
         bq = bq.filter(Buyer.id.in_(vids))
     buyers = bq.order_by(Buyer.name).all()
     teams = Team.query.all()
-    po_q = visible_styles_query(Style.query, current_user).filter(Style.po.isnot(None)).filter(Style.po != '')
+    _vq = visible_styles_query(Style.query, current_user)
+    po_q = _vq.filter(Style.po.isnot(None)).filter(Style.po != '')
     po_list = sorted({r[0] for r in po_q.with_entities(Style.po).distinct().all() if r[0]})
+    merch_q = _vq.filter(Style.merchandiser.isnot(None)).filter(Style.merchandiser != '')
+    merch_list = sorted({r[0] for r in merch_q.with_entities(Style.merchandiser).distinct().all() if r[0]})
+    style_list = sorted({r[0] for r in _vq.with_entities(Style.style_no).distinct().all() if r[0]})
     report_files = []
     if os.path.exists(REPORT_DIR):
         for f in os.listdir(REPORT_DIR):
@@ -1038,7 +1079,8 @@ def reports():
                 'modified': datetime.fromtimestamp(os.path.getmtime(fp)).strftime('%Y-%m-%d %H:%M')
             })
     report_files.sort(key=lambda x: x['modified'], reverse=True)
-    return render_template('reports.html', buyers=buyers, teams=teams, report_files=report_files, po_list=po_list)
+    return render_template('reports.html', buyers=buyers, teams=teams, report_files=report_files,
+                           po_list=po_list, merch_list=merch_list, style_list=style_list)
 
 
 @app.route('/reports/generate', methods=['POST'])
@@ -1050,6 +1092,7 @@ def generate_report():
     status = request.form.get('status', '')
     po_filter = request.form.get('po', '').strip()
     style_no_filter = request.form.get('style_no', '').strip()
+    merch_filter = request.form.get('merchandiser', '').strip()
     include_comments = request.form.get('include_comments') == 'on'
 
     query = visible_styles_query(Style.query, current_user)
@@ -1063,10 +1106,12 @@ def generate_report():
         query = query.filter_by(team_id=team_id)
     if status:
         query = query.filter_by(status=status)
+    if merch_filter:
+        query = query.filter(Style.merchandiser == merch_filter)
     if po_filter:
-        query = query.filter(Style.po.ilike(f'%{po_filter}%'))
+        query = query.filter(Style.po == po_filter)
     if style_no_filter:
-        query = query.filter(Style.style_no.ilike(f'%{style_no_filter}%'))
+        query = query.filter(Style.style_no == style_no_filter)
     styles_data = query.order_by(Style.buyer_id, Style.style_no).all()
 
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
