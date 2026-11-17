@@ -107,6 +107,34 @@ class Style(db.Model):
     created_by = db.Column(db.Integer, db.ForeignKey('user.id'))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    # Office-report fields (from the user's Excel files — shown in reports)
+    merchandiser = db.Column(db.String(150))
+    etd = db.Column(db.String(50))
+    created_date = db.Column(db.String(50))
+    lead_time = db.Column(db.Integer)
+    fab_lead_time = db.Column(db.Integer)
+    rmg_lead_time = db.Column(db.Integer)
+    run_day = db.Column(db.Integer)
+    smv = db.Column(db.Float)
+    store_ref = db.Column(db.String(150))
+    fab_sr = db.Column(db.String(150))
+    cutt_name = db.Column(db.String(150))
+    line = db.Column(db.String(50))
+    fabric_booking = db.Column(db.Float)
+    fabric_rcv = db.Column(db.Float)
+    fabric_tna = db.Column(db.String(50))
+    cutting_qty = db.Column(db.Integer)
+    sewing_qty = db.Column(db.Integer)
+    wash = db.Column(db.Integer)
+    print_qty = db.Column(db.Integer)
+    emb = db.Column(db.Integer)
+    logic_tna = db.Column(db.String(50))
+    pcd = db.Column(db.String(50))
+    lock_plan = db.Column(db.String(50))
+    input_start = db.Column(db.String(50))
+    sewing_end = db.Column(db.String(50))
+    ship_date = db.Column(db.String(50))
+    pp_status = db.Column(db.String(50))
     comments = db.relationship('StyleComment', backref='style', lazy=True, order_by='StyleComment.created_at.desc()')
 
 
@@ -575,6 +603,38 @@ IMPORT_HEADERS = {
     'rate': 'unit_price',
     'unitfobprice': 'unit_price',
     'status': 'status',
+    # Office-report headings (user's Excel files)
+    'merchendiser': 'merchandiser',
+    'merchandiser': 'merchandiser',
+    'etd': 'etd',
+    'createddate': 'created_date',
+    'leadtime': 'lead_time',
+    'fableadtime': 'fab_lead_time',
+    'rmgleadtime': 'rmg_lead_time',
+    'runday': 'run_day',
+    'smv': 'smv',
+    'storeref': 'store_ref',
+    'fabsr': 'fab_sr',
+    'fabricsr': 'fab_sr',
+    'cuttname': 'cutt_name',
+    'cutname': 'cutt_name',
+    'line': 'line',
+    'fabricbooking': 'fabric_booking',
+    'fabricrcv': 'fabric_rcv',
+    'fabrictna': 'fabric_tna',
+    'cuttingqty': 'cutting_qty',
+    'sewing': 'sewing_qty',
+    'sewingqty': 'sewing_qty',
+    'wash': 'wash',
+    'print': 'print_qty',
+    'emb': 'emb',
+    'logictna': 'logic_tna',
+    'pcd': 'pcd',
+    'lockplan': 'lock_plan',
+    'inputstart': 'input_start',
+    'sewingend': 'sewing_end',
+    'shipdate': 'ship_date',
+    'ppstatus': 'pp_status',
     'remark': 'remark',
     'remarks': 'remark',
     'comment': 'remark',
@@ -612,6 +672,19 @@ def _to_float(value):
         return float(str(value).replace(',', '').replace('$', '').strip())
     except (ValueError, TypeError):
         return None
+
+
+def _to_str(value):
+    """Cell value -> short text. Dates become YYYY-MM-DD; blanks become None."""
+    if value is None:
+        return None
+    import datetime as _dt
+    if isinstance(value, _dt.datetime):
+        return value.strftime('%Y-%m-%d')
+    if isinstance(value, _dt.date):
+        return value.strftime('%Y-%m-%d')
+    s = str(value).strip()
+    return s if s else None
 
 
 def _get_or_create_buyer(name):
@@ -742,6 +815,35 @@ def _import_styles_workbook(wb, user_id):
         price = _to_float(val('unit_price'))
         if price is not None:
             style.unit_price = price
+        # Office-report fields (only overwrite when the cell has a value)
+        _txt = {'merchandiser': 'merchandiser', 'store_ref': 'store_ref',
+                'fab_sr': 'fab_sr', 'cutt_name': 'cutt_name', 'line': 'line',
+                'pp_status': 'pp_status'}
+        for _f, _k in _txt.items():
+            _v = _to_str(val(_k))
+            if _v is not None:
+                setattr(style, _f, _v)
+        _dates = ['etd', 'created_date', 'fabric_tna', 'logic_tna', 'pcd',
+                  'lock_plan', 'input_start', 'sewing_end', 'ship_date']
+        for _f in _dates:
+            _v = _to_str(val(_f))
+            if _v is not None:
+                setattr(style, _f, _v)
+        _ints = ['lead_time', 'fab_lead_time', 'rmg_lead_time', 'run_day',
+                 'cutting_qty', 'sewing_qty', 'wash', 'print_qty', 'emb']
+        for _f in _ints:
+            _v = _to_int(val(_f))
+            if _v is not None:
+                setattr(style, _f, _v)
+        _smv = _to_float(val('smv'))
+        if _smv is not None:
+            style.smv = _smv
+        _fb = _to_float(val('fabric_booking'))
+        if _fb is not None:
+            style.fabric_booking = _fb
+        _fr = _to_float(val('fabric_rcv'))
+        if _fr is not None:
+            style.fabric_rcv = _fr
         status = val('status')
         if status is not None:
             status = str(status).strip().title()
@@ -1012,6 +1114,71 @@ def delete_report(filename):
 
 
 # ─── Report Generators ────────────────────────────────────────────────────────
+# Report columns, in the same order as the user's office Excel files.
+# Each entry: (header label, attribute on Style or a special key).
+REPORT_COLUMNS = [
+    ('Merchandiser', 'merchandiser'),
+    ('Buyer', 'buyer_name'),
+    ('PO', 'po'),
+    ('Style No', 'style_no'),
+    ('Store Ref', 'store_ref'),
+    ('Item', 'description'),
+    ('ETD', 'etd'),
+    ('Created Date', 'created_date'),
+    ('Lead Time', 'lead_time'),
+    ('Fab Lead Time', 'fab_lead_time'),
+    ('Rmg Lead Time', 'rmg_lead_time'),
+    ('Run Day', 'run_day'),
+    ('SMV', 'smv'),
+    ('Fab S/R', 'fab_sr'),
+    ('Cutt Name', 'cutt_name'),
+    ('Line', 'line'),
+    ('Order Qty', 'quantity'),
+    ('Fabric Booking', 'fabric_booking'),
+    ('Fabric rcv', 'fabric_rcv'),
+    ('Fabric TNA', 'fabric_tna'),
+    ('Cutting Qty', 'cutting_qty'),
+    ('Sewing Qty', 'sewing_qty'),
+    ('Wash', 'wash'),
+    ('Print', 'print_qty'),
+    ('EMB', 'emb'),
+    ('Logic TNA', 'logic_tna'),
+    ('PCD', 'pcd'),
+    ('Lock Plan', 'lock_plan'),
+    ('Input Start', 'input_start'),
+    ('Sewing End', 'sewing_end'),
+    ('Ship Date', 'ship_date'),
+    ('PP Status', 'pp_status'),
+    ('Team', 'team_name'),
+    ('Season', 'season'),
+    ('Category', 'category'),
+    ('Fabric', 'fabric'),
+    ('Color', 'color'),
+    ('Unit Price ($)', 'unit_price'),
+    ('Total Value ($)', 'total_value'),
+    ('Status', 'status'),
+    ('Created At', 'created_at_str'),
+]
+
+
+def _report_value(style, key, idx):
+    """One cell value for a report column key."""
+    if key == 'buyer_name':
+        return style.buyer.name if style.buyer else ''
+    if key == 'team_name':
+        return style.team.name if style.team else ''
+    if key == 'total_value':
+        return round((style.quantity or 0) * (style.unit_price or 0), 2)
+    if key == 'created_at_str':
+        return style.created_at.strftime('%Y-%m-%d') if style.created_at else ''
+    if key == 'quantity':
+        return style.quantity or 0
+    if key == 'unit_price':
+        return style.unit_price or 0
+    v = getattr(style, key, None)
+    return v if v is not None else ''
+
+
 def _generate_excel(styles_data, filepath, include_comments=False):
     import openpyxl
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -1038,9 +1205,7 @@ def _generate_excel(styles_data, filepath, include_comments=False):
         'Active': PatternFill("solid", fgColor="D6EAF8"),
     }
 
-    headers = ['#', 'Style No', 'PO', 'Description', 'Buyer', 'Team', 'Season',
-               'Category', 'Fabric', 'Color', 'Quantity', 'Unit Price ($)',
-               'Total Value ($)', 'Status', 'Created At']
+    headers = ['#'] + [h for h, _ in REPORT_COLUMNS]
     if include_comments:
         headers.append('Remark (Latest Comment)')
     ncols = len(headers)
@@ -1071,19 +1236,10 @@ def _generate_excel(styles_data, filepath, include_comments=False):
     for i, style in enumerate(styles_data):
         row_idx = 4 + i
         fill = alt_fill if i % 2 == 1 else PatternFill()
-        total_val = (style.quantity or 0) * (style.unit_price or 0)
         latest_comment = ''
         if include_comments and style.comments:
             latest_comment = style.comments[0].comment or ''
-        row_data = [
-            i + 1, style.style_no, style.po or '', style.description or '',
-            style.buyer.name if style.buyer else '',
-            style.team.name if style.team else '',
-            style.season or '', style.category or '', style.fabric or '',
-            style.color or '', style.quantity or 0, style.unit_price or 0,
-            round(total_val, 2), style.status,
-            style.created_at.strftime('%Y-%m-%d') if style.created_at else ''
-        ]
+        row_data = [i + 1] + [_report_value(style, k, i) for _, k in REPORT_COLUMNS]
         if include_comments:
             row_data.append(latest_comment)
         for col, val in enumerate(row_data, 1):
@@ -1091,12 +1247,16 @@ def _generate_excel(styles_data, filepath, include_comments=False):
             cell.fill = fill
             cell.border = border
             cell.alignment = Alignment(vertical='center', wrap_text=True)
-            if headers[col - 1] == 'Quantity':
+            if headers[col - 1] in ('Order Qty', 'Cutting Qty', 'Sewing Qty', 'Wash', 'Print', 'EMB',
+                                     'Lead Time', 'Fab Lead Time', 'Rmg Lead Time', 'Run Day'):
                 cell.alignment = Alignment(horizontal='right', vertical='center')
                 cell.number_format = '#,##0'
-            if headers[col - 1] in ('Unit Price ($)', 'Total Value ($)'):
+            if headers[col - 1] in ('Unit Price ($)', 'Total Value ($)', 'Fabric Booking', 'Fabric rcv'):
                 cell.alignment = Alignment(horizontal='right', vertical='center')
-                cell.number_format = '"$"#,##0.00'
+                cell.number_format = '"$"#,##0.00' if headers[col - 1] in ('Unit Price ($)', 'Total Value ($)') else '#,##0.00'
+            if headers[col - 1] == 'SMV':
+                cell.alignment = Alignment(horizontal='right', vertical='center')
+                cell.number_format = '0.00'
         sc = ws.cell(row=row_idx, column=headers.index('Status') + 1)
         if style.status in status_fill:
             sc.fill = status_fill[style.status]
@@ -1111,7 +1271,7 @@ def _generate_excel(styles_data, filepath, include_comments=False):
         cell.border = border
         cell.font = total_font
     ws.cell(row=tr, column=1, value='TOTAL').alignment = Alignment(horizontal='center', vertical='center')
-    qty_col = headers.index('Quantity') + 1
+    qty_col = headers.index('Order Qty') + 1
     tot_col = headers.index('Total Value ($)') + 1
     c = ws.cell(row=tr, column=qty_col, value=total_qty)
     c.number_format = '#,##0'
@@ -1122,12 +1282,19 @@ def _generate_excel(styles_data, filepath, include_comments=False):
     ws.row_dimensions[tr].height = 22
 
     # Column widths
-    widths = {'#': 5, 'Style No': 16, 'PO': 14, 'Description': 28, 'Buyer': 18,
-              'Team': 14, 'Season': 10, 'Category': 14, 'Fabric': 14, 'Color': 12,
-              'Quantity': 11, 'Unit Price ($)': 13, 'Total Value ($)': 14,
-              'Status': 11, 'Created At': 12, 'Remark (Latest Comment)': 45}
+    widths = {'#': 5, 'Merchandiser': 16, 'Buyer': 16, 'PO': 15, 'Style No': 18,
+              'Store Ref': 16, 'Item': 26, 'ETD': 11, 'Created Date': 11,
+              'Lead Time': 9, 'Fab Lead Time': 10, 'Rmg Lead Time': 10, 'Run Day': 8,
+              'SMV': 7, 'Fab S/R': 12, 'Cutt Name': 12, 'Line': 7, 'Order Qty': 10,
+              'Fabric Booking': 12, 'Fabric rcv': 11, 'Fabric TNA': 11,
+              'Cutting Qty': 10, 'Sewing Qty': 10, 'Wash': 8, 'Print': 8, 'EMB': 8,
+              'Logic TNA': 11, 'PCD': 11, 'Lock Plan': 11, 'Input Start': 11,
+              'Sewing End': 11, 'Ship Date': 11, 'PP Status': 10, 'Team': 13,
+              'Season': 10, 'Category': 13, 'Fabric': 13, 'Color': 10,
+              'Unit Price ($)': 12, 'Total Value ($)': 13, 'Status': 10,
+              'Created At': 11, 'Remark (Latest Comment)': 45}
     for col, h in enumerate(headers, 1):
-        ws.column_dimensions[get_column_letter(col)].width = widths.get(h, 14)
+        ws.column_dimensions[get_column_letter(col)].width = widths.get(h, 12)
 
     ws.freeze_panes = 'A4'
     ws.sheet_properties.pageSetUpPr.fitToPage = True
@@ -1220,7 +1387,7 @@ def _generate_pdf(styles_data, filepath, include_comments=False):
         f"<b>Total Value:</b> ${total_val:,.2f}", sub_style))
     elements.append(Spacer(1, 0.4 * cm))
 
-    headers = ['#', 'Style No', 'PO', 'Buyer', 'Season', 'Category', 'Qty', 'Price ($)', 'Total ($)', 'Status']
+    headers = ['#'] + [h for h, _ in REPORT_COLUMNS]
     if include_comments:
         headers.append('Remark')
     # Adaptive print: many columns -> smaller font, columns scaled to fit the page
@@ -1228,32 +1395,36 @@ def _generate_pdf(styles_data, filepath, include_comments=False):
     fs = 8 if ncols <= 10 else (7 if ncols <= 14 else 6)
     pstyle = ParagraphStyle('Cell', parent=styles['Normal'], fontSize=fs, leading=fs + 2)
     pstyle_b = ParagraphStyle('CellB', parent=pstyle, fontName='Helvetica-Bold')
+    pstyle_h = ParagraphStyle('H', parent=pstyle, textColor=colors.white, fontName='Helvetica-Bold')
 
-    table_data = [[Paragraph(f'<b>{h}</b>', ParagraphStyle('H', parent=pstyle, textColor=colors.white)) for h in headers]]
+    table_data = [[Paragraph(f'<b>{h}</b>', pstyle_h) for h in headers]]
     for idx, style in enumerate(styles_data, 1):
-        row = [
-            str(idx), style.style_no, style.po or '',
-            style.buyer.name if style.buyer else '',
-            style.season or '', style.category or '',
-            f"{style.quantity or 0:,}", f"{style.unit_price or 0:.2f}",
-            f"{(style.quantity or 0) * (style.unit_price or 0):,.2f}",
-            style.status
-        ]
+        row = [str(idx)] + [str(_report_value(style, k, idx)) for _, k in REPORT_COLUMNS]
         if include_comments:
             row.append(style.comments[0].comment if style.comments else '')
         table_data.append([Paragraph(str(v), pstyle) for v in row])
     # Totals row
-    tot_row = ['', '', '', '', '', '', f"<b>{total_qty:,}</b>", '', f"<b>${total_val:,.2f}</b>", '']
-    if include_comments:
-        tot_row.append('')
+    tot_row = [''] * len(headers)
+    tot_row[headers.index('Order Qty')] = f"<b>{total_qty:,}</b>"
+    tot_row[headers.index('Total Value ($)')] = f"<b>${total_val:,.2f}</b>"
     table_data.append([Paragraph(v, pstyle_b) if v else Paragraph('', pstyle) for v in tot_row])
 
-    base_widths = [0.9, 2.8, 2.4, 3.4, 2.2, 2.6, 1.6, 1.8, 2.0, 2.2]
-    if include_comments:
-        base_widths.append(4.5)
+    # Column widths: base weights scaled to fit the page width
+    base_w = {'#': 0.9, 'Merchandiser': 2.5, 'Buyer': 2.5, 'PO': 2.2, 'Style No': 2.8,
+              'Store Ref': 2.2, 'Item': 3.0, 'ETD': 1.8, 'Created Date': 1.8,
+              'Lead Time': 1.2, 'Fab Lead Time': 1.4, 'Rmg Lead Time': 1.4, 'Run Day': 1.0,
+              'SMV': 1.0, 'Fab S/R': 1.8, 'Cutt Name': 1.8, 'Line': 1.0, 'Order Qty': 1.4,
+              'Fabric Booking': 1.6, 'Fabric rcv': 1.6, 'Fabric TNA': 1.6,
+              'Cutting Qty': 1.4, 'Sewing Qty': 1.4, 'Wash': 1.0, 'Print': 1.0, 'EMB': 1.0,
+              'Logic TNA': 1.6, 'PCD': 1.6, 'Lock Plan': 1.6, 'Input Start': 1.6,
+              'Sewing End': 1.6, 'Ship Date': 1.6, 'PP Status': 1.4, 'Team': 1.8,
+              'Season': 1.4, 'Category': 1.8, 'Fabric': 1.8, 'Color': 1.4,
+              'Unit Price ($)': 1.4, 'Total Value ($)': 1.6, 'Status': 1.4,
+              'Created At': 1.6, 'Remark': 4.0}
     page_w = landscape(A4)[0] - 2 * cm
-    scale = min(1.0, page_w / (sum(base_widths) * cm))
-    col_widths = [w * cm * scale for w in base_widths]
+    total_base = sum(base_w.get(h, 1.4) for h in headers)
+    scale = min(1.0, page_w / (total_base * cm))
+    col_widths = [base_w.get(h, 1.4) * cm * scale for h in headers]
 
     table = Table(table_data, colWidths=col_widths, repeatRows=1)
     style_cmds = [
@@ -1268,8 +1439,10 @@ def _generate_pdf(styles_data, filepath, include_comments=False):
         ('FONTSIZE', (0, 1), (-1, -1), fs),
         ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#D9E6F2')),
         ('LINEABOVE', (0, -1), (-1, -1), 1, colors.HexColor('#1a3c5e')),
-        ('TOPPADDING', (0, 0), (-1, -1), 3),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+        ('LEFTPADDING', (0, 0), (-1, -1), 2),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 2),
+        ('TOPPADDING', (0, 0), (-1, -1), 2),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
     ]
     table.setStyle(TableStyle(style_cmds))
     elements.append(table)
@@ -1279,26 +1452,66 @@ def _generate_pdf(styles_data, filepath, include_comments=False):
 def init_db():
     with app.app_context():
         db.create_all()
-        # Lightweight migrations for existing installs
-        try:
-            from sqlalchemy import inspect as _sa_inspect, text as _sa_text
+        # Lightweight migrations for existing installs.
+        # Each step runs independently so one failure cannot block the others.
+        from sqlalchemy import inspect as _sa_inspect, text as _sa_text
+
+        def _migrate(label, fn):
+            try:
+                fn()
+            except Exception as _e:
+                print(f"Warning during migration ({label}): {_e}")
+
+        def _add_po():
             _cols = [c['name'] for c in _sa_inspect(db.engine).get_columns('style')]
             if 'po' not in _cols:
                 with db.engine.begin() as _conn:
                     _conn.execute(_sa_text('ALTER TABLE style ADD COLUMN po VARCHAR(100)'))
                     _conn.execute(_sa_text("UPDATE style SET po = '' WHERE po IS NULL"))
-            # Team leader column
+
+        def _add_leader():
             _tcols = [c['name'] for c in _sa_inspect(db.engine).get_columns('team')]
             if 'leader_id' not in _tcols:
                 with db.engine.begin() as _conn:
                     _conn.execute(_sa_text('ALTER TABLE team ADD COLUMN leader_id INTEGER REFERENCES "user"(id)'))
-            # Buyer optional on styles (Style-Name-only placeholders)
+
+        def _drop_buyer_notnull():
+            # PostgreSQL only (SQLite has no ALTER COLUMN); makes buyer optional
+            # for Style-Name-only placeholders.
+            if db.engine.dialect.name != 'postgresql':
+                return
             _scols = {c['name']: c for c in _sa_inspect(db.engine).get_columns('style')}
             if _scols.get('buyer_id', {}).get('nullable') is False:
                 with db.engine.begin() as _conn:
                     _conn.execute(_sa_text('ALTER TABLE style ALTER COLUMN buyer_id DROP NOT NULL'))
-        except Exception as _e:
-            print(f"Warning during migration: {_e}")
+
+        def _add_office_cols():
+            _new_cols = {
+                'merchandiser': 'VARCHAR(150)', 'etd': 'VARCHAR(50)',
+                'created_date': 'VARCHAR(50)', 'lead_time': 'INTEGER',
+                'fab_lead_time': 'INTEGER', 'rmg_lead_time': 'INTEGER',
+                'run_day': 'INTEGER', 'smv': 'FLOAT',
+                'store_ref': 'VARCHAR(150)', 'fab_sr': 'VARCHAR(150)',
+                'cutt_name': 'VARCHAR(150)', 'line': 'VARCHAR(50)',
+                'fabric_booking': 'FLOAT', 'fabric_rcv': 'FLOAT',
+                'fabric_tna': 'VARCHAR(50)', 'cutting_qty': 'INTEGER',
+                'sewing_qty': 'INTEGER', 'wash': 'INTEGER',
+                'print_qty': 'INTEGER', 'emb': 'INTEGER',
+                'logic_tna': 'VARCHAR(50)', 'pcd': 'VARCHAR(50)',
+                'lock_plan': 'VARCHAR(50)', 'input_start': 'VARCHAR(50)',
+                'sewing_end': 'VARCHAR(50)', 'ship_date': 'VARCHAR(50)',
+                'pp_status': 'VARCHAR(50)',
+            }
+            _have = {c['name'] for c in _sa_inspect(db.engine).get_columns('style')}
+            for _col, _typ in _new_cols.items():
+                if _col not in _have:
+                    with db.engine.begin() as _conn:
+                        _conn.execute(_sa_text(f'ALTER TABLE style ADD COLUMN {_col} {_typ}'))
+
+        _migrate('po', _add_po)
+        _migrate('leader_id', _add_leader)
+        _migrate('buyer_notnull', _drop_buyer_notnull)
+        _migrate('office_cols', _add_office_cols)
         # Create default admin if not exists
         if not User.query.filter_by(username='admin').first():
             admin = User(username='admin', full_name='Administrator (Boss)', role='admin', is_active=True)
