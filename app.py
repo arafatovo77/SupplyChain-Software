@@ -1220,11 +1220,14 @@ def _generate_pdf(styles_data, filepath, include_comments=False):
         f"<b>Total Value:</b> ${total_val:,.2f}", sub_style))
     elements.append(Spacer(1, 0.4 * cm))
 
-    pstyle = ParagraphStyle('Cell', parent=styles['Normal'], fontSize=8, leading=10)
-    pstyle_b = ParagraphStyle('CellB', parent=pstyle, fontName='Helvetica-Bold')
     headers = ['#', 'Style No', 'PO', 'Buyer', 'Season', 'Category', 'Qty', 'Price ($)', 'Total ($)', 'Status']
     if include_comments:
         headers.append('Remark')
+    # Adaptive print: many columns -> smaller font, columns scaled to fit the page
+    ncols = len(headers)
+    fs = 8 if ncols <= 10 else (7 if ncols <= 14 else 6)
+    pstyle = ParagraphStyle('Cell', parent=styles['Normal'], fontSize=fs, leading=fs + 2)
+    pstyle_b = ParagraphStyle('CellB', parent=pstyle, fontName='Helvetica-Bold')
 
     table_data = [[Paragraph(f'<b>{h}</b>', ParagraphStyle('H', parent=pstyle, textColor=colors.white)) for h in headers]]
     for idx, style in enumerate(styles_data, 1):
@@ -1245,21 +1248,24 @@ def _generate_pdf(styles_data, filepath, include_comments=False):
         tot_row.append('')
     table_data.append([Paragraph(v, pstyle_b) if v else Paragraph('', pstyle) for v in tot_row])
 
-    col_widths = [0.9 * cm, 2.8 * cm, 2.4 * cm, 3.4 * cm, 2.2 * cm, 2.6 * cm, 1.6 * cm, 1.8 * cm, 2.0 * cm, 2.2 * cm]
+    base_widths = [0.9, 2.8, 2.4, 3.4, 2.2, 2.6, 1.6, 1.8, 2.0, 2.2]
     if include_comments:
-        col_widths.append(4.5 * cm)
+        base_widths.append(4.5)
+    page_w = landscape(A4)[0] - 2 * cm
+    scale = min(1.0, page_w / (sum(base_widths) * cm))
+    col_widths = [w * cm * scale for w in base_widths]
 
     table = Table(table_data, colWidths=col_widths, repeatRows=1)
     style_cmds = [
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1a3c5e')),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, 0), 9),
+        ('FONTSIZE', (0, 0), (-1, 0), fs + 1),
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
         ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.white, colors.HexColor('#EBF3FB')]),
         ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-        ('FONTSIZE', (0, 1), (-1, -1), 8),
+        ('FONTSIZE', (0, 1), (-1, -1), fs),
         ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#D9E6F2')),
         ('LINEABOVE', (0, -1), (-1, -1), 1, colors.HexColor('#1a3c5e')),
         ('TOPPADDING', (0, 0), (-1, -1), 3),
