@@ -30,6 +30,16 @@
           </div>
 
           <div class="mb-3">
+            <label class="form-label fw-bold">Filter by Merchandiser</label>
+            <select name="merchandiser" class="form-select">
+              <option value="">-- All Merchandisers --</option>
+              {% for m in merch_list %}
+              <option value="{{ m }}">{{ m }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div class="mb-3">
             <label class="form-label fw-bold">Filter by PO Number</label>
             <select name="po" class="form-select">
               <option value="">-- All POs --</option>
@@ -41,7 +51,12 @@
 
           <div class="mb-3">
             <label class="form-label fw-bold">Filter by Style No</label>
-            <input type="text" name="style_no" class="form-control" placeholder="e.g. ST-2026-001 (partial match)">
+            <select name="style_no" class="form-select">
+              <option value="">-- All Styles --</option>
+              {% for s in style_list %}
+              <option value="{{ s }}">{{ s }}</option>
+              {% endfor %}
+            </select>
           </div>
 
           <div class="mb-3">
