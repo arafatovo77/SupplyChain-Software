@@ -30,6 +30,21 @@
           </div>
 
           <div class="mb-3">
+            <label class="form-label fw-bold">Filter by PO Number</label>
+            <select name="po" class="form-select">
+              <option value="">-- All POs --</option>
+              {% for po in po_list %}
+              <option value="{{ po }}">{{ po }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label fw-bold">Filter by Style No</label>
+            <input type="text" name="style_no" class="form-control" placeholder="e.g. ST-2026-001 (partial match)">
+          </div>
+
+          <div class="mb-3">
             <label class="form-label fw-bold">Filter by Buyer</label>
             <select name="buyer_id" class="form-select">
               <option value="">-- All Buyers --</option>
@@ -68,14 +83,18 @@
           </div>
 
           <button type="submit" class="btn btn-primary w-100 py-2 fw-semibold">
-            <i class="fas fa-file-export me-1"></i> Generate & Save Report
+            <i class="fas fa-download me-1"></i> Generate & Download Report
           </button>
         </form>
 
         <div class="mt-4 p-3 bg-light rounded border">
           <small class="text-muted d-block">
+            <i class="fas fa-download text-success me-1"></i> <strong>Auto-download:</strong>
+            the report downloads straight away when you generate it. A copy is also saved in the archive below.
+          </small>
+          <small class="text-muted d-block mt-1">
             <i class="fas fa-lock text-warning me-1"></i> <strong>Report Security:</strong>
-            All generated reports require security PIN <code>2201</code> to download or view.
+            downloading an older file from the archive requires security PIN <code>2201</code>.
           </small>
         </div>
       </div>
