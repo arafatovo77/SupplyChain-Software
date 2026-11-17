@@ -76,6 +76,7 @@ class Buyer(db.Model):
 class Style(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     style_no = db.Column(db.String(100), nullable=False)
+    po = db.Column(db.String(100))
     description = db.Column(db.Text)
     buyer_id = db.Column(db.Integer, db.ForeignKey('buyer.id'), nullable=False)
     team_id = db.Column(db.Integer, db.ForeignKey('team.id'), nullable=True)
@@ -332,7 +333,7 @@ def styles():
     if status:
         query = query.filter_by(status=status)
     if q:
-        query = query.filter(Style.style_no.ilike(f'%{q}%') | Style.description.ilike(f'%{q}%'))
+        query = query.filter(Style.style_no.ilike(f'%{q}%') | Style.description.ilike(f'%{q}%') | Style.po.ilike(f'%{q}%'))
 
     all_styles = query.order_by(Style.created_at.desc()).all()
     all_buyers = Buyer.query.filter_by(is_active=True).order_by(Buyer.name).all()
@@ -346,6 +347,7 @@ def styles():
 @login_required
 def add_style():
     style_no = request.form.get('style_no', '').strip()
+    po = request.form.get('po', '').strip()
     description = request.form.get('description', '').strip()
     buyer_id = request.form.get('buyer_id', type=int)
     team_id = request.form.get('team_id') or None
@@ -358,7 +360,7 @@ def add_style():
     status = request.form.get('status', 'Active')
     initial_comment = request.form.get('initial_comment', '').strip()
 
-    style = Style(style_no=style_no, description=description, buyer_id=buyer_id,
+    style = Style(style_no=style_no, po=po, description=description, buyer_id=buyer_id,
                   team_id=team_id, season=season, category=category, fabric=fabric,
                   color=color, quantity=quantity, unit_price=unit_price, status=status,
                   created_by=current_user.id)
@@ -381,6 +383,10 @@ IMPORT_HEADERS = {
     'style': 'style_no',
     'styleref': 'style_no',
     'stylenumber': 'style_no',
+    'po': 'po',
+    'pono': 'po',
+    'purchaseorder': 'po',
+    'jobno': 'po',
     'description': 'description',
     'desc': 'description',
     'styledescription': 'description',
@@ -524,11 +530,22 @@ def _import_styles_workbook(wb, user_id):
             continue
         buyer = _get_or_create_buyer(buyer_name)
 
-        style = Style.query.filter_by(style_no=style_no, buyer_id=buyer.id).first()
+        po = val('po')
+        po = str(po).strip() if po is not None else ''
+        style = Style.query.filter_by(style_no=style_no, buyer_id=buyer.id, po=po).first()
+        if style is None:
+            if po:
+                # A PO-less copy exists (imported before PO) — adopt it, don't duplicate
+                style = Style.query.filter_by(style_no=style_no, buyer_id=buyer.id, po='').first()
+            else:
+                # Blank-PO row: update the most recent copy under this Style No + Buyer
+                style = Style.query.filter_by(style_no=style_no, buyer_id=buyer.id).order_by(Style.updated_at.desc()).first()
         is_new = style is None
         if is_new:
-            style = Style(style_no=style_no, buyer_id=buyer.id, created_by=user_id)
+            style = Style(style_no=style_no, buyer_id=buyer.id, po=po, created_by=user_id)
             db.session.add(style)
+        elif po:
+            style.po = po
 
         # Only overwrite a field when the cell has a value (blank keeps old value)
         if val('description') is not None:
@@ -619,6 +636,7 @@ def style_detail(sid):
 def edit_style(sid):
     style = Style.query.get_or_404(sid)
     style.style_no = request.form.get('style_no', style.style_no).strip()
+    style.po = request.form.get('po', style.po or '').strip()
     style.description = request.form.get('description', '').strip()
     style.buyer_id = request.form.get('buyer_id', type=int)
     style.team_id = request.form.get('team_id') or None
@@ -889,6 +907,16 @@ def _generate_pdf(styles_data, filepath, include_comments=False):
 def init_db():
     with app.app_context():
         db.create_all()
+        # Lightweight migration: add the PO column on existing installs
+        try:
+            from sqlalchemy import inspect as _sa_inspect, text as _sa_text
+            _cols = [c['name'] for c in _sa_inspect(db.engine).get_columns('style')]
+            if 'po' not in _cols:
+                with db.engine.begin() as _conn:
+                    _conn.execute(_sa_text('ALTER TABLE style ADD COLUMN po VARCHAR(100)'))
+                    _conn.execute(_sa_text("UPDATE style SET po = '' WHERE po IS NULL"))
+        except Exception as _e:
+            print(f"Warning during PO migration: {_e}")
         # Create default admin if not exists
         if not User.query.filter_by(username='admin').first():
             admin = User(username='admin', full_name='Administrator (Boss)', role='admin', is_active=True)
