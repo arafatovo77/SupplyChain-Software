@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{% block title %}SCM System{% endblock %}</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+<style>
+  :root {
+    --primary: #1a3c5e;
+    --secondary: #2980b9;
+    --accent: #e74c3c;
+    --light-bg: #f0f4f8;
+  }
+  body { background: var(--light-bg); font-family: 'Segoe UI', sans-serif; }
+  .sidebar {
+    width: 240px; min-height: 100vh; background: var(--primary);
+    position: fixed; top: 0; left: 0; z-index: 100; padding-top: 70px;
+    transition: all 0.3s;
+  }
+  .sidebar .nav-link {
+    color: rgba(255,255,255,0.75); padding: 10px 20px;
+    display: flex; align-items: center; gap: 10px;
+    border-left: 3px solid transparent; transition: all 0.2s;
+  }
+  .sidebar .nav-link:hover, .sidebar .nav-link.active {
+    color: white; background: rgba(255,255,255,0.1);
+    border-left-color: #3498db;
+  }
+  .sidebar .nav-link i { width: 20px; }
+  .sidebar-brand {
+    position: fixed; top: 0; left: 0; width: 240px;
+    background: rgba(0,0,0,0.3); padding: 15px 20px;
+    color: white; font-weight: 700; font-size: 1rem; z-index: 101;
+  }
+  .sidebar-brand span { color: #3498db; }
+  .main-content { margin-left: 240px; min-height: 100vh; }
+  .topbar {
+    background: white; padding: 12px 25px; border-bottom: 1px solid #dee2e6;
+    display: flex; justify-content: space-between; align-items: center;
+    position: sticky; top: 0; z-index: 99; box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+  }
+  .topbar .page-title { font-weight: 600; color: var(--primary); font-size: 1.1rem; }
+  .content-area { padding: 25px; }
+  .card { border: none; box-shadow: 0 2px 10px rgba(0,0,0,0.07); border-radius: 10px; }
+  .card-header { border-radius: 10px 10px 0 0 !important; }
+  .stat-card { border-radius: 12px; overflow: hidden; }
+  .stat-card .stat-icon {
+    width: 60px; height: 60px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.4rem; opacity: 0.9;
+  }
+  .badge-status-Active { background:#27ae60; }
+  .badge-status-Completed { background:#2980b9; }
+  .badge-status-On.Hold, .badge-status-On { background:#e67e22; }
+  .badge-status-Cancelled { background:#e74c3c; }
+  .role-badge-admin { background:#8e44ad; }
+  .role-badge-leader { background:#2980b9; }
+  .role-badge-member { background:#27ae60; }
+  .comment-card { border-left: 4px solid #3498db; }
+  .comment-card.General { border-left-color: #3498db; }
+  .comment-card.Update { border-left-color: #27ae60; }
+  .comment-card.Issue { border-left-color: #e74c3c; }
+  .comment-card.Resolution { border-left-color: #f39c12; }
+  .table th { background: var(--primary); color: white; font-weight: 500; }
+  .btn-primary { background: var(--primary); border-color: var(--primary); }
+  .btn-primary:hover { background: var(--secondary); border-color: var(--secondary); }
+  .sidebar-section { color: rgba(255,255,255,0.4); font-size:0.7rem; text-transform:uppercase; padding: 15px 20px 5px; letter-spacing: 1px; }
+  @media print {
+    .sidebar, .topbar, .btn, .modal, .no-print { display: none !important; }
+    .main-content { margin-left: 0 !important; }
+  }
+</style>
+{% block extra_css %}{% endblock %}
+</head>
+<body>
+{% if current_user.is_authenticated %}
+<div class="sidebar-brand">
+  <i class="fas fa-link me-2" style="color:#3498db"></i>
+  Supply<span>Chain</span> SCM
+</div>
+<nav class="sidebar">
+  <div class="sidebar-section">Main</div>
+  <a href="{{ url_for('dashboard') }}" class="nav-link {% if request.endpoint == 'dashboard' %}active{% endif %}">
+    <i class="fas fa-tachometer-alt"></i> Dashboard
+  </a>
+  <a href="{{ url_for('buyers') }}" class="nav-link {% if request.endpoint in ['buyers'] %}active{% endif %}">
+    <i class="fas fa-handshake"></i> Buyers
+  </a>
+  <a href="{{ url_for('styles') }}" class="nav-link {% if request.endpoint in ['styles','style_detail'] %}active{% endif %}">
+    <i class="fas fa-tshirt"></i> Styles
+  </a>
+  <div class="sidebar-section">Reports</div>
+  <a href="{{ url_for('reports') }}" class="nav-link {% if request.endpoint == 'reports' %}active{% endif %}">
+    <i class="fas fa-file-chart-bar"></i> Reports
+  </a>
+  {% if current_user.is_admin %}
+  <div class="sidebar-section">Admin</div>
+  <a href="{{ url_for('teams') }}" class="nav-link {% if request.endpoint == 'teams' %}active{% endif %}">
+    <i class="fas fa-users"></i> Teams
+  </a>
+  <a href="{{ url_for('users') }}" class="nav-link {% if request.endpoint == 'users' %}active{% endif %}">
+    <i class="fas fa-user-cog"></i> Users
+  </a>
+  {% endif %}
+  <div class="sidebar-section">Account</div>
+  <a href="{{ url_for('logout') }}" class="nav-link">
+    <i class="fas fa-sign-out-alt"></i> Logout
+  </a>
+</nav>
+<div class="main-content">
+  <div class="topbar">
+    <span class="page-title">{% block page_title %}{% endblock %}</span>
+    <div class="d-flex align-items-center gap-3">
+      <span class="text-muted small">
+        <i class="fas fa-user-circle me-1"></i>
+        {{ current_user.full_name }}
+        <span class="badge role-badge-{{ current_user.role }} text-white ms-1">{{ current_user.role.upper() }}</span>
+      </span>
+    </div>
+  </div>
+  <div class="content-area">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for cat, msg in messages %}
+          <div class="alert alert-{{ cat }} alert-dismissible fade show" role="alert">
+            {{ msg }} <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+          </div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+  </div>
+</div>
+{% else %}
+{% block auth_content %}{% endblock %}
+{% endif %}
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+{% block extra_js %}{% endblock %}
+</body>
+</html>

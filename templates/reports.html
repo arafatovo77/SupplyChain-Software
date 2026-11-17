@@ -1,0 +1,140 @@
+{% extends 'base.html' %}
+{% block title %}Reports - SCM{% endblock %}
+{% block page_title %}<i class="fas fa-file-chart-bar me-2"></i>Reports & Exports{% endblock %}
+{% block content %}
+<div class="row g-4">
+  <!-- Report Generator Form -->
+  <div class="col-lg-5">
+    <div class="card shadow-sm border-0">
+      <div class="card-header bg-primary text-white py-3">
+        <h6 class="mb-0 fw-bold"><i class="fas fa-cog me-1"></i> Generate Management Report</h6>
+      </div>
+      <div class="card-body p-4">
+        <form action="{{ url_for('generate_report') }}" method="POST">
+          <div class="mb-3">
+            <label class="form-label fw-bold">Report Format</label>
+            <div class="d-flex gap-3">
+              <div class="form-check">
+                <input class="form-check-input" type="radio" name="report_type" id="fmtExcel" value="excel" checked>
+                <label class="form-check-label fw-semibold text-success" for="fmtExcel">
+                  <i class="fas fa-file-excel me-1"></i> Excel (.xlsx)
+                </label>
+              </div>
+              <div class="form-check">
+                <input class="form-check-input" type="radio" name="report_type" id="fmtPdf" value="pdf">
+                <label class="form-check-label fw-semibold text-danger" for="fmtPdf">
+                  <i class="fas fa-file-pdf me-1"></i> PDF Document
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label fw-bold">Filter by Buyer</label>
+            <select name="buyer_id" class="form-select">
+              <option value="">-- All Buyers --</option>
+              {% for b in buyers %}
+              <option value="{{ b.id }}">{{ b.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label fw-bold">Filter by Team</label>
+            <select name="team_id" class="form-select">
+              <option value="">-- All Teams --</option>
+              {% for t in teams %}
+              <option value="{{ t.id }}">{{ t.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label fw-bold">Filter by Status</label>
+            <select name="status" class="form-select">
+              <option value="">-- All Statuses --</option>
+              <option value="Active">Active</option>
+              <option value="Completed">Completed</option>
+              <option value="On Hold">On Hold</option>
+              <option value="Cancelled">Cancelled</option>
+            </select>
+          </div>
+
+          <div class="form-check mb-4">
+            <input class="form-check-input" type="checkbox" name="include_comments" id="incComm" checked>
+            <label class="form-check-label" for="incComm">
+              Include Latest Comments / Updates in Report
+            </label>
+          </div>
+
+          <button type="submit" class="btn btn-primary w-100 py-2 fw-semibold">
+            <i class="fas fa-file-export me-1"></i> Generate & Save Report
+          </button>
+        </form>
+
+        <div class="mt-4 p-3 bg-light rounded border">
+          <small class="text-muted d-block">
+            <i class="fas fa-lock text-warning me-1"></i> <strong>Report Security:</strong>
+            All generated reports require security PIN <code>2201</code> to download or view.
+          </small>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Generated Reports Archive -->
+  <div class="col-lg-7">
+    <div class="card shadow-sm border-0">
+      <div class="card-header bg-white py-3 border-bottom d-flex justify-content-between align-items-center">
+        <h6 class="mb-0 fw-bold text-primary">
+          <i class="fas fa-folder-open me-1"></i> Generated Reports Archive
+        </h6>
+        <span class="badge bg-secondary">{{ report_files|length }} files</span>
+      </div>
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-hover align-middle mb-0">
+            <thead class="table-light">
+              <tr>
+                <th>File Name</th>
+                <th>Size</th>
+                <th>Generated At</th>
+                <th class="text-end">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for rf in report_files %}
+              <tr>
+                <td>
+                  <i class="fas {% if rf.name.endswith('.xlsx') %}fa-file-excel text-success{% else %}fa-file-pdf text-danger{% endif %} me-2"></i>
+                  <span class="fw-semibold">{{ rf.name }}</span>
+                </td>
+                <td><small class="text-muted">{{ rf.size }} KB</small></td>
+                <td><small class="text-muted">{{ rf.modified }}</small></td>
+                <td class="text-end">
+                  <a href="{{ url_for('download_report', filename=rf.name) }}" class="btn btn-sm btn-outline-primary" title="Download (Password Protected: 2201)">
+                    <i class="fas fa-download me-1"></i> Download
+                  </a>
+                  {% if current_user.is_admin %}
+                  <a href="{{ url_for('delete_report', filename=rf.name) }}" class="btn btn-sm btn-outline-danger" onclick="return confirm('Delete this report file?')" title="Delete Report">
+                    <i class="fas fa-trash"></i>
+                  </a>
+                  {% endif %}
+                </td>
+              </tr>
+              {% else %}
+              <tr>
+                <td colspan="4" class="text-center py-5 text-muted">
+                  <i class="fas fa-file-invoice fa-2x mb-2 text-secondary"></i>
+                  <p class="mb-0">No reports generated yet. Select filters and click "Generate & Save Report".</p>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

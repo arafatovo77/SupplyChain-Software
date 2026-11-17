@@ -1,0 +1,241 @@
+{% extends 'base.html' %}
+{% block title %}Style {{ style.style_no }} - SCM{% endblock %}
+{% block page_title %}<i class="fas fa-tshirt me-2"></i>Style Details: {{ style.style_no }}{% endblock %}
+{% block content %}
+<div class="row mb-3 align-items-center">
+  <div class="col-md-6">
+    <a href="{{ url_for('styles') }}" class="btn btn-outline-secondary btn-sm mb-2 no-print">
+      <i class="fas fa-arrow-left me-1"></i> Back to Styles
+    </a>
+    <h4 class="mb-0 text-primary fw-bold">{{ style.style_no }}</h4>
+    <small class="text-muted">{{ style.description or 'No description provided' }}</small>
+  </div>
+  <div class="col-md-6 text-md-end mt-2 mt-md-0 d-flex gap-2 justify-content-md-end no-print">
+    <button class="btn btn-outline-secondary btn-sm" onclick="window.print()">
+      <i class="fas fa-print me-1"></i> Print Style Sheet
+    </button>
+    <button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#editStyleModal">
+      <i class="fas fa-edit me-1"></i> Edit Info
+    </button>
+  </div>
+</div>
+
+<div class="row g-4">
+  <!-- Style Specification Overview -->
+  <div class="col-lg-5">
+    <div class="card shadow-sm mb-4">
+      <div class="card-header bg-primary text-white py-2 d-flex justify-content-between align-items-center">
+        <span class="fw-bold"><i class="fas fa-info-circle me-1"></i> Specification</span>
+        <span class="badge badge-status-{{ style.status.replace(' ','') }} text-white">{{ style.status }}</span>
+      </div>
+      <div class="card-body p-0">
+        <table class="table table-bordered mb-0">
+          <tbody>
+            <tr>
+              <th class="bg-light text-muted w-40" style="width: 40%;">Buyer</th>
+              <td><strong class="text-primary">{{ style.buyer.name if style.buyer else '-' }}</strong></td>
+            </tr>
+            <tr>
+              <th class="bg-light text-muted">Assigned Team</th>
+              <td>{{ style.team.name if style.team else 'Unassigned' }}</td>
+            </tr>
+            <tr>
+              <th class="bg-light text-muted">Season</th>
+              <td>{{ style.season or '-' }}</td>
+            </tr>
+            <tr>
+              <th class="bg-light text-muted">Category</th>
+              <td>{{ style.category or '-' }}</td>
+            </tr>
+            <tr>
+              <th class="bg-light text-muted">Fabric</th>
+              <td>{{ style.fabric or '-' }}</td>
+            </tr>
+            <tr>
+              <th class="bg-light text-muted">Color / Wash</th>
+              <td>{{ style.color or '-' }}</td>
+            </tr>
+            <tr>
+              <th class="bg-light text-muted">Order Quantity</th>
+              <td class="fw-bold">{{ '{:,}'.format(style.quantity or 0) }} pcs</td>
+            </tr>
+            <tr>
+              <th class="bg-light text-muted">Unit FOB Price</th>
+              <td>${{ '{:.2f}'.format(style.unit_price or 0) }}</td>
+            </tr>
+            <tr>
+              <th class="bg-light text-muted">Total Order Value</th>
+              <td class="fw-bold text-success fs-5">
+                ${{ '{:,.2f}'.format((style.quantity or 0) * (style.unit_price or 0)) }}
+              </td>
+            </tr>
+            <tr>
+              <th class="bg-light text-muted">Created Date</th>
+              <td><small class="text-muted">{{ style.created_at.strftime('%Y-%m-%d %H:%M') }}</small></td>
+            </tr>
+            <tr>
+              <th class="bg-light text-muted">Last Updated</th>
+              <td><small class="text-muted">{{ style.updated_at.strftime('%Y-%m-%d %H:%M') if style.updated_at else '-' }}</small></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Comments / Daily Updates History -->
+  <div class="col-lg-7">
+    <div class="card shadow-sm mb-4">
+      <div class="card-header bg-white py-3 border-bottom d-flex justify-content-between align-items-center">
+        <h6 class="mb-0 fw-bold text-primary">
+          <i class="fas fa-history me-1"></i> Comments & Progress History
+          <span class="badge bg-secondary ms-1">{{ style.comments|length }}</span>
+        </h6>
+      </div>
+
+      <!-- Add New Comment Box -->
+      <div class="card-body bg-light border-bottom no-print p-3">
+        <form action="{{ url_for('add_comment', sid=style.id) }}" method="POST">
+          <div class="row g-2 mb-2">
+            <div class="col-md-8">
+              <label class="form-label small fw-bold mb-1">Add New Comment / Update</label>
+              <textarea name="comment" class="form-control form-control-sm" rows="2" placeholder="Write update, sample approval, fabric status, delay reason..." required></textarea>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label small fw-bold mb-1">Type</label>
+              <select name="comment_type" class="form-select form-select-sm mb-2">
+                <option value="General">General Note</option>
+                <option value="Update">Status Update</option>
+                <option value="Issue">Issue / Delay</option>
+                <option value="Resolution">Resolution</option>
+              </select>
+              <button type="submit" class="btn btn-primary btn-sm w-100">
+                <i class="fas fa-paper-plane me-1"></i> Post Comment
+              </button>
+            </div>
+          </div>
+        </form>
+      </div>
+
+      <!-- Chronological Comments History List -->
+      <div class="card-body p-3" style="max-height: 520px; overflow-y: auto;">
+        {% if style.comments %}
+          {% for c in style.comments %}
+          <div class="card mb-3 comment-card {{ c.comment_type }} shadow-none border">
+            <div class="card-body p-3">
+              <div class="d-flex justify-content-between align-items-center mb-1">
+                <div>
+                  <strong class="text-dark">{{ c.user.full_name if c.user else 'Unknown Member' }}</strong>
+                  <span class="badge bg-light text-dark border ms-1" style="font-size:0.7rem;">
+                    {{ c.user.role.upper() if c.user else '' }}
+                  </span>
+                  <span class="badge 
+                    {% if c.comment_type == 'Issue' %}bg-danger
+                    {% elif c.comment_type == 'Update' %}bg-success
+                    {% elif c.comment_type == 'Resolution' %}bg-warning text-dark
+                    {% else %}bg-primary{% endif %} ms-1" style="font-size:0.7rem;">
+                    {{ c.comment_type }}
+                  </span>
+                </div>
+                <small class="text-muted"><i class="far fa-clock me-1"></i>{{ c.created_at.strftime('%Y-%m-%d %I:%M %p') }}</small>
+              </div>
+              <p class="mb-0 text-secondary" style="white-space: pre-wrap; font-size: 0.92rem;">{{ c.comment }}</p>
+            </div>
+          </div>
+          {% endfor %}
+        {% else %}
+          <div class="text-center py-4 text-muted">
+            <i class="far fa-comments fa-2x mb-2 text-muted"></i>
+            <p class="mb-0">No comments posted yet for this style. Add an update above!</p>
+          </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Edit Style Modal -->
+<div class="modal fade" id="editStyleModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <form action="{{ url_for('edit_style', sid=style.id) }}" method="POST">
+        <div class="modal-header bg-primary text-white">
+          <h5 class="modal-title"><i class="fas fa-edit me-1"></i> Edit Style: {{ style.style_no }}</h5>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div class="row">
+            <div class="col-md-6 mb-3">
+              <label class="form-label fw-bold">Style Number *</label>
+              <input type="text" name="style_no" class="form-control" value="{{ style.style_no }}" required>
+            </div>
+            <div class="col-md-6 mb-3">
+              <label class="form-label fw-bold">Buyer *</label>
+              <select name="buyer_id" class="form-select" required>
+                {% for b in buyers %}
+                <option value="{{ b.id }}" {% if style.buyer_id == b.id %}selected{% endif %}>{{ b.name }}</option>
+                {% endfor %}
+              </select>
+            </div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Style Description</label>
+            <input type="text" name="description" class="form-control" value="{{ style.description or '' }}">
+          </div>
+          <div class="row">
+            <div class="col-md-4 mb-3">
+              <label class="form-label">Assigned Team</label>
+              <select name="team_id" class="form-select">
+                <option value="">-- None --</option>
+                {% for t in teams %}
+                <option value="{{ t.id }}" {% if style.team_id == t.id %}selected{% endif %}>{{ t.name }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-md-4 mb-3">
+              <label class="form-label">Season</label>
+              <input type="text" name="season" class="form-control" value="{{ style.season or '' }}">
+            </div>
+            <div class="col-md-4 mb-3">
+              <label class="form-label">Category</label>
+              <input type="text" name="category" class="form-control" value="{{ style.category or '' }}">
+            </div>
+          </div>
+          <div class="row">
+            <div class="col-md-4 mb-3">
+              <label class="form-label">Fabric</label>
+              <input type="text" name="fabric" class="form-control" value="{{ style.fabric or '' }}">
+            </div>
+            <div class="col-md-4 mb-3">
+              <label class="form-label">Color / Wash</label>
+              <input type="text" name="color" class="form-control" value="{{ style.color or '' }}">
+            </div>
+            <div class="col-md-4 mb-3">
+              <label class="form-label">Status</label>
+              <select name="status" class="form-select">
+                {% for s in ['Active', 'Completed', 'On Hold', 'Cancelled'] %}
+                <option value="{{ s }}" {% if style.status == s %}selected{% endif %}>{{ s }}</option>
+                {% endfor %}
+              </select>
+            </div>
+          </div>
+          <div class="row">
+            <div class="col-md-6 mb-3">
+              <label class="form-label fw-bold">Order Quantity (pcs)</label>
+              <input type="number" name="quantity" class="form-control" value="{{ style.quantity or 0 }}">
+            </div>
+            <div class="col-md-6 mb-3">
+              <label class="form-label fw-bold">Unit FOB Price ($)</label>
+              <input type="number" step="0.01" name="unit_price" class="form-control" value="{{ style.unit_price or 0.0 }}">
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary"><i class="fas fa-save me-1"></i> Save Changes</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

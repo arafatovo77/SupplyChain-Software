@@ -1,0 +1,251 @@
+{% extends 'base.html' %}
+{% block title %}Styles - SCM{% endblock %}
+{% block page_title %}<i class="fas fa-tshirt me-2"></i>Style Management{% endblock %}
+{% block content %}
+<div class="row mb-3 align-items-center">
+  <div class="col-md-6">
+    <h5 class="mb-0 text-primary fw-bold">Styles & Orders</h5>
+    <small class="text-muted">Track buyer styles, quantities, pricing, and live updates</small>
+  </div>
+  <div class="col-md-6 text-md-end mt-2 mt-md-0 d-flex gap-2 justify-content-md-end">
+    <button class="btn btn-outline-secondary btn-sm" onclick="window.print()">
+      <i class="fas fa-print me-1"></i> Print View
+    </button>
+    <a href="{{ url_for('reports') }}" class="btn btn-outline-primary btn-sm">
+      <i class="fas fa-file-export me-1"></i> Export Report
+    </a>
+    <button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#addStyleModal">
+      <i class="fas fa-plus me-1"></i> Add Style
+    </button>
+  </div>
+</div>
+
+<!-- Filters -->
+<div class="card mb-4 no-print shadow-sm">
+  <div class="card-body p-3">
+    <form method="GET" class="row g-2 align-items-end">
+      <div class="col-md-3">
+        <label class="form-label small fw-bold text-muted mb-1">Buyer</label>
+        <select name="buyer_id" class="form-select form-select-sm" onchange="this.form.submit()">
+          <option value="">-- All Buyers --</option>
+          {% for b in buyers %}
+          <option value="{{ b.id }}" {% if selected_buyer == b.id %}selected{% endif %}>{{ b.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label small fw-bold text-muted mb-1">Team</label>
+        <select name="team_id" class="form-select form-select-sm" onchange="this.form.submit()">
+          <option value="">-- All Teams --</option>
+          {% for t in teams %}
+          <option value="{{ t.id }}" {% if selected_team == t.id %}selected{% endif %}>{{ t.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label small fw-bold text-muted mb-1">Status</label>
+        <select name="status" class="form-select form-select-sm" onchange="this.form.submit()">
+          <option value="">-- All Status --</option>
+          {% for s in ['Active', 'Completed', 'On Hold', 'Cancelled'] %}
+          <option value="{{ s }}" {% if selected_status == s %}selected{% endif %}>{{ s }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label small fw-bold text-muted mb-1">Search</label>
+        <div class="input-group input-group-sm">
+          <input type="text" name="q" class="form-control" placeholder="Style No or desc..." value="{{ search_q or '' }}">
+          <button class="btn btn-primary" type="submit"><i class="fas fa-search"></i></button>
+        </div>
+      </div>
+      <div class="col-md-1">
+        <a href="{{ url_for('styles') }}" class="btn btn-outline-secondary btn-sm w-100" title="Reset Filters">
+          <i class="fas fa-undo"></i>
+        </a>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Styles Table -->
+<div class="card shadow-sm">
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-hover align-middle mb-0 font-monospace-numbers">
+        <thead class="table-light">
+          <tr>
+            <th>#</th>
+            <th>Style No</th>
+            <th>Buyer</th>
+            <th>Category / Season</th>
+            <th>Color / Fabric</th>
+            <th class="text-end">Qty (pcs)</th>
+            <th class="text-end">Price ($)</th>
+            <th class="text-end">Total ($)</th>
+            <th>Team</th>
+            <th>Status</th>
+            <th>Latest Comment</th>
+            <th class="no-print text-center">Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for s in styles %}
+          <tr>
+            <td>{{ loop.index }}</td>
+            <td>
+              <a href="{{ url_for('style_detail', sid=s.id) }}" class="fw-bold text-primary text-decoration-none">
+                {{ s.style_no }}
+              </a>
+              {% if s.description %}
+              <div class="text-muted small text-truncate" style="max-width: 150px;">{{ s.description }}</div>
+              {% endif %}
+            </td>
+            <td>
+              <span class="badge bg-light text-dark border">{{ s.buyer.name if s.buyer else '-' }}</span>
+            </td>
+            <td>
+              <div>{{ s.category or '-' }}</div>
+              <small class="text-muted">{{ s.season or '' }}</small>
+            </td>
+            <td>
+              <div>{{ s.color or '-' }}</div>
+              <small class="text-muted">{{ s.fabric or '' }}</small>
+            </td>
+            <td class="text-end fw-semibold">{{ '{:,}'.format(s.quantity or 0) }}</td>
+            <td class="text-end">${{ '{:.2f}'.format(s.unit_price or 0) }}</td>
+            <td class="text-end fw-bold text-success">
+              ${{ '{:,.2f}'.format((s.quantity or 0) * (s.unit_price or 0)) }}
+            </td>
+            <td>
+              {% if s.team %}
+              <span class="badge bg-info text-dark">{{ s.team.name }}</span>
+              {% else %}
+              <span class="text-muted">-</span>
+              {% endif %}
+            </td>
+            <td>
+              <span class="badge badge-status-{{ s.status.replace(' ','') }} text-white">{{ s.status }}</span>
+            </td>
+            <td style="max-width: 200px;">
+              {% if s.comments %}
+              <div class="small text-truncate" title="{{ s.comments[0].comment }}">
+                <span class="badge bg-secondary me-1" style="font-size: 0.65rem;">{{ s.comments[0].comment_type }}</span>
+                {{ s.comments[0].comment }}
+              </div>
+              <small class="text-muted" style="font-size: 0.7rem;">
+                by {{ s.comments[0].user.full_name if s.comments[0].user else 'Unknown' }} ({{ s.comments|length }} comments)
+              </small>
+              {% else %}
+              <small class="text-muted fst-italic">No comments</small>
+              {% endif %}
+            </td>
+            <td class="no-print text-center">
+              <a href="{{ url_for('style_detail', sid=s.id) }}" class="btn btn-sm btn-outline-primary" title="View details & comments">
+                <i class="fas fa-eye"></i> Details
+              </a>
+            </td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="12" class="text-center py-4 text-muted">
+              No styles found matching criteria. Click "+ Add Style" to create one.
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- Add Style Modal -->
+<div class="modal fade" id="addStyleModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <form action="{{ url_for('add_style') }}" method="POST">
+        <div class="modal-header bg-primary text-white">
+          <h5 class="modal-title"><i class="fas fa-plus-circle me-1"></i> Add New Style</h5>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div class="row">
+            <div class="col-md-6 mb-3">
+              <label class="form-label fw-bold">Style Number *</label>
+              <input type="text" name="style_no" class="form-control" placeholder="e.g. ST-2026-001" required>
+            </div>
+            <div class="col-md-6 mb-3">
+              <label class="form-label fw-bold">Buyer *</label>
+              <select name="buyer_id" class="form-select" required>
+                <option value="">-- Select Buyer --</option>
+                {% for b in buyers %}
+                <option value="{{ b.id }}">{{ b.name }}</option>
+                {% endfor %}
+              </select>
+            </div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Style Description / Item Name</label>
+            <input type="text" name="description" class="form-control" placeholder="e.g. Men's Cotton Polo Shirt with Embroidery">
+          </div>
+          <div class="row">
+            <div class="col-md-4 mb-3">
+              <label class="form-label">Assign to Team</label>
+              <select name="team_id" class="form-select">
+                <option value="">-- Select Team --</option>
+                {% for t in teams %}
+                <option value="{{ t.id }}">{{ t.name }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-md-4 mb-3">
+              <label class="form-label">Season</label>
+              <input type="text" name="season" class="form-control" placeholder="e.g. SS-2026 / Winter">
+            </div>
+            <div class="col-md-4 mb-3">
+              <label class="form-label">Category</label>
+              <input type="text" name="category" class="form-control" placeholder="e.g. Knit / Woven / Denim">
+            </div>
+          </div>
+          <div class="row">
+            <div class="col-md-4 mb-3">
+              <label class="form-label">Fabric</label>
+              <input type="text" name="fabric" class="form-control" placeholder="e.g. 100% Cotton Single Jersey">
+            </div>
+            <div class="col-md-4 mb-3">
+              <label class="form-label">Color / Wash</label>
+              <input type="text" name="color" class="form-control" placeholder="e.g. Navy / Enzyme Wash">
+            </div>
+            <div class="col-md-4 mb-3">
+              <label class="form-label">Status</label>
+              <select name="status" class="form-select">
+                <option value="Active" selected>Active</option>
+                <option value="Completed">Completed</option>
+                <option value="On Hold">On Hold</option>
+                <option value="Cancelled">Cancelled</option>
+              </select>
+            </div>
+          </div>
+          <div class="row">
+            <div class="col-md-6 mb-3">
+              <label class="form-label fw-bold">Order Quantity (pcs)</label>
+              <input type="number" name="quantity" class="form-control" value="0" min="0">
+            </div>
+            <div class="col-md-6 mb-3">
+              <label class="form-label fw-bold">Unit FOB Price ($)</label>
+              <input type="number" step="0.01" name="unit_price" class="form-control" value="0.00" min="0">
+            </div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label fw-bold">Initial Comment / Order Notes</label>
+            <textarea name="initial_comment" class="form-control" rows="2" placeholder="Fabric booking status, lab dip approval, sample deadline, etc."></textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary"><i class="fas fa-save me-1"></i> Create Style</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
