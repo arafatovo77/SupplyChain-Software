@@ -57,7 +57,7 @@
       <div class="col-md-3">
         <label class="form-label small fw-bold text-muted mb-1">Search</label>
         <div class="input-group input-group-sm">
-          <input type="text" name="q" class="form-control" placeholder="Style No or desc..." value="{{ search_q or '' }}">
+          <input type="text" name="q" class="form-control" placeholder="Style No, PO or desc..." value="{{ search_q or '' }}">
           <button class="btn btn-primary" type="submit"><i class="fas fa-search"></i></button>
         </div>
       </div>
@@ -79,6 +79,7 @@
           <tr>
             <th>#</th>
             <th>Style No</th>
+            <th>PO</th>
             <th>Buyer</th>
             <th>Category / Season</th>
             <th>Color / Fabric</th>
@@ -103,6 +104,7 @@
               <div class="text-muted small text-truncate" style="max-width: 150px;">{{ s.description }}</div>
               {% endif %}
             </td>
+            <td class="fw-semibold">{{ s.po or '-' }}</td>
             <td>
               <span class="badge bg-light text-dark border">{{ s.buyer.name if s.buyer else '-' }}</span>
             </td>
@@ -150,7 +152,7 @@
           </tr>
           {% else %}
           <tr>
-            <td colspan="12" class="text-center py-4 text-muted">
+            <td colspan="13" class="text-center py-4 text-muted">
               No styles found matching criteria. Click "+ Add Style" to create one.
             </td>
           </tr>
@@ -172,11 +174,15 @@
         </div>
         <div class="modal-body">
           <div class="row">
-            <div class="col-md-6 mb-3">
+            <div class="col-md-4 mb-3">
               <label class="form-label fw-bold">Style Number *</label>
               <input type="text" name="style_no" class="form-control" placeholder="e.g. ST-2026-001" required>
             </div>
-            <div class="col-md-6 mb-3">
+            <div class="col-md-4 mb-3">
+              <label class="form-label fw-bold">PO Number</label>
+              <input type="text" name="po" class="form-control" placeholder="e.g. PO-2026-001">
+            </div>
+            <div class="col-md-4 mb-3">
               <label class="form-label fw-bold">Buyer *</label>
               <select name="buyer_id" class="form-select" required>
                 <option value="">-- Select Buyer --</option>

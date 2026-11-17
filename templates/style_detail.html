@@ -36,6 +36,10 @@
               <td><strong class="text-primary">{{ style.buyer.name if style.buyer else '-' }}</strong></td>
             </tr>
             <tr>
+              <th class="bg-light text-muted">PO Number</th>
+              <td class="fw-bold">{{ style.po or '-' }}</td>
+            </tr>
+            <tr>
               <th class="bg-light text-muted">Assigned Team</th>
               <td>{{ style.team.name if style.team else 'Unassigned' }}</td>
             </tr>
@@ -165,11 +169,15 @@
         </div>
         <div class="modal-body">
           <div class="row">
-            <div class="col-md-6 mb-3">
+            <div class="col-md-4 mb-3">
               <label class="form-label fw-bold">Style Number *</label>
               <input type="text" name="style_no" class="form-control" value="{{ style.style_no }}" required>
             </div>
-            <div class="col-md-6 mb-3">
+            <div class="col-md-4 mb-3">
+              <label class="form-label fw-bold">PO Number</label>
+              <input type="text" name="po" class="form-control" value="{{ style.po or '' }}">
+            </div>
+            <div class="col-md-4 mb-3">
               <label class="form-label fw-bold">Buyer *</label>
               <select name="buyer_id" class="form-select" required>
                 {% for b in buyers %}
