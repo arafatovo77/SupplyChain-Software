@@ -1,0 +1,46 @@
+{% extends 'base.html' %}
+{% block title %}Login - SCM System{% endblock %}
+{% block auth_content %}
+<div class="d-flex align-items-center justify-content-center min-vh-100" style="background: linear-gradient(135deg, #1a3c5e 0%, #2980b9 100%);">
+  <div class="card shadow-lg" style="width:420px; border-radius:16px; overflow:hidden;">
+    <div class="card-body p-0">
+      <div class="text-center py-4" style="background:#1a3c5e;">
+        <i class="fas fa-link fa-2x" style="color:#3498db;"></i>
+        <h4 class="text-white mt-2 mb-0 fw-bold">Supply Chain SCM</h4>
+        <p class="text-white-50 small mb-0">Management System</p>
+      </div>
+      <div class="p-4">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+            {% for cat, msg in messages %}
+              <div class="alert alert-{{ cat }}">{{ msg }}</div>
+            {% endfor %}
+          {% endif %}
+        {% endwith %}
+        <form method="POST">
+          <div class="mb-3">
+            <label class="form-label fw-semibold text-muted">Username</label>
+            <div class="input-group">
+              <span class="input-group-text bg-light"><i class="fas fa-user text-muted"></i></span>
+              <input type="text" name="username" class="form-control" placeholder="Enter username" required autofocus>
+            </div>
+          </div>
+          <div class="mb-4">
+            <label class="form-label fw-semibold text-muted">Password</label>
+            <div class="input-group">
+              <span class="input-group-text bg-light"><i class="fas fa-lock text-muted"></i></span>
+              <input type="password" name="password" class="form-control" placeholder="Enter password" required>
+            </div>
+          </div>
+          <button type="submit" class="btn btn-primary w-100 py-2 fw-semibold">
+            <i class="fas fa-sign-in-alt me-2"></i>Login
+          </button>
+        </form>
+        <p class="text-center text-muted small mt-3 mb-0">
+          <i class="fas fa-shield-alt me-1"></i>Secure Supply Chain Management
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
