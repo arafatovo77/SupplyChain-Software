@@ -375,6 +375,236 @@ def add_style():
     return redirect(url_for('styles'))
 
 
+# ─── Excel Import (Styles) ────────────────────────────────────────────────────
+IMPORT_HEADERS = {
+    'styleno': 'style_no',
+    'style': 'style_no',
+    'styleref': 'style_no',
+    'stylenumber': 'style_no',
+    'description': 'description',
+    'desc': 'description',
+    'styledescription': 'description',
+    'item': 'description',
+    'itemname': 'description',
+    'gmtsitem': 'description',
+    'product': 'description',
+    'buyer': 'buyer',
+    'buyername': 'buyer',
+    'customer': 'buyer',
+    'team': 'team',
+    'teamname': 'team',
+    'season': 'season',
+    'category': 'category',
+    'cat': 'category',
+    'garmentcategory': 'category',
+    'fabric': 'fabric',
+    'fabrictype': 'fabric',
+    'color': 'color',
+    'colour': 'color',
+    'colorwash': 'color',
+    'quantity': 'quantity',
+    'qty': 'quantity',
+    'orderqty': 'quantity',
+    'orderquantity': 'quantity',
+    'unitprice': 'unit_price',
+    'price': 'unit_price',
+    'fob': 'unit_price',
+    'fobprice': 'unit_price',
+    'rate': 'unit_price',
+    'unitfobprice': 'unit_price',
+    'status': 'status',
+    'remark': 'remark',
+    'remarks': 'remark',
+    'comment': 'remark',
+    'comments': 'remark',
+    'note': 'remark',
+    'notes': 'remark',
+    'followup': 'remark',
+}
+
+VALID_STATUSES = {'Active', 'Completed', 'On Hold', 'Cancelled'}
+
+
+def _norm_header(value):
+    if value is None:
+        return ''
+    s = str(value).strip().lower()
+    for ch in (' ', '_', '-', '.', '/', '\\'):
+        s = s.replace(ch, '')
+    return s
+
+
+def _to_int(value):
+    try:
+        if value is None or str(value).strip() == '':
+            return None
+        return int(float(str(value).replace(',', '').strip()))
+    except (ValueError, TypeError):
+        return None
+
+
+def _to_float(value):
+    try:
+        if value is None or str(value).strip() == '':
+            return None
+        return float(str(value).replace(',', '').replace('$', '').strip())
+    except (ValueError, TypeError):
+        return None
+
+
+def _get_or_create_buyer(name):
+    name = str(name).strip()
+    buyer = Buyer.query.filter(db.func.lower(Buyer.name) == name.lower()).first()
+    if not buyer:
+        buyer = Buyer(name=name, is_active=True)
+        db.session.add(buyer)
+        db.session.flush()
+    return buyer
+
+
+def _get_or_create_team(name):
+    name = str(name).strip()
+    team = Team.query.filter(db.func.lower(Team.name) == name.lower()).first()
+    if not team:
+        team = Team(name=name)
+        db.session.add(team)
+        db.session.flush()
+    return team
+
+
+def _import_styles_workbook(wb, user_id):
+    """Parse the active sheet and upsert styles. Returns (added, updated, skipped, remarks_added)."""
+    ws = wb.active
+    rows = list(ws.iter_rows(values_only=True))
+    if not rows:
+        return 0, 0, [('—', 'Empty file — no rows found.')], 0
+
+    # Find the header row (scan first 3 rows)
+    header_idx = None
+    colmap = {}
+    for i in range(min(3, len(rows))):
+        mapping = {}
+        for j, cell in enumerate(rows[i]):
+            field = IMPORT_HEADERS.get(_norm_header(cell))
+            if field and field not in mapping:
+                mapping[field] = j
+        if 'style_no' in mapping or len(mapping) >= 2:
+            header_idx = i
+            colmap = mapping
+            break
+    if header_idx is None or 'style_no' not in colmap:
+        return 0, 0, [('—', 'No heading row found. The file needs a heading row with at least a "Style No" column (e.g. Style No, Buyer, Quantity, Unit Price).')], 0
+
+    added = 0
+    updated = 0
+    remarks_added = 0
+    skipped = []
+    for r in range(header_idx + 1, len(rows)):
+        row = rows[r]
+        excel_row = r + 1
+
+        def val(field):
+            j = colmap.get(field)
+            if j is None or j >= len(row):
+                return None
+            v = row[j]
+            if isinstance(v, str):
+                v = v.strip()
+                return v if v else None
+            return v
+
+        style_no = val('style_no')
+        if style_no is None:
+            continue  # blank row — ignore silently
+        style_no = str(style_no).strip()
+
+        buyer_name = val('buyer')
+        if not buyer_name:
+            skipped.append((excel_row, 'Style ' + style_no + ': no Buyer — row skipped.'))
+            continue
+        buyer = _get_or_create_buyer(buyer_name)
+
+        style = Style.query.filter_by(style_no=style_no, buyer_id=buyer.id).first()
+        is_new = style is None
+        if is_new:
+            style = Style(style_no=style_no, buyer_id=buyer.id, created_by=user_id)
+            db.session.add(style)
+
+        # Only overwrite a field when the cell has a value (blank keeps old value)
+        if val('description') is not None:
+            style.description = str(val('description'))
+        if val('team') is not None:
+            style.team_id = _get_or_create_team(val('team')).id
+        if val('season') is not None:
+            style.season = str(val('season'))
+        if val('category') is not None:
+            style.category = str(val('category'))
+        if val('fabric') is not None:
+            style.fabric = str(val('fabric'))
+        if val('color') is not None:
+            style.color = str(val('color'))
+        qty = _to_int(val('quantity'))
+        if qty is not None:
+            style.quantity = qty
+        price = _to_float(val('unit_price'))
+        if price is not None:
+            style.unit_price = price
+        status = val('status')
+        if status is not None:
+            status = str(status).strip().title()
+            if status in VALID_STATUSES:
+                style.status = status
+            elif is_new:
+                style.status = 'Active'
+        if is_new and not style.status:
+            style.status = 'Active'
+
+        db.session.flush()
+
+        remark = val('remark')
+        if remark is not None:
+            remark = str(remark).strip()
+            latest = style.comments[0].comment if style.comments else None
+            if remark and remark != latest:
+                db.session.add(StyleComment(style_id=style.id, user_id=user_id,
+                                            comment=remark, comment_type='General'))
+                remarks_added += 1
+
+        if is_new:
+            added += 1
+        else:
+            updated += 1
+
+    db.session.commit()
+    return added, updated, skipped, remarks_added
+
+
+@app.route('/styles/import', methods=['GET', 'POST'])
+@login_required
+def import_styles():
+    result = None
+    if request.method == 'POST':
+        f = request.files.get('file')
+        if not f or not f.filename:
+            flash('Please choose an Excel (.xlsx) file first.', 'danger')
+            return redirect(url_for('import_styles'))
+        if not f.filename.lower().endswith('.xlsx'):
+            flash('Only .xlsx Excel files are supported.', 'danger')
+            return redirect(url_for('import_styles'))
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(f, data_only=True)
+            added, updated, skipped, remarks_added = _import_styles_workbook(wb, current_user.id)
+        except Exception as e:
+            flash('Could not read this file: ' + str(e), 'danger')
+            return redirect(url_for('import_styles'))
+        result = {'added': added, 'updated': updated, 'skipped': skipped,
+                  'remarks_added': remarks_added,
+                  'filename': f.filename}
+        flash('Import finished: ' + str(added) + ' added, ' + str(updated) + ' updated, ' + str(len(skipped)) + ' skipped.', 'success' if not skipped else 'warning')
+    return render_template('import_styles.html', result=result)
+
+
 @app.route('/styles/<int:sid>')
 @login_required
 def style_detail(sid):
